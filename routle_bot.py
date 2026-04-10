@@ -23,6 +23,7 @@ from config import (
     SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE,
     ROUTLERS_LIST_URI, KNOWN_PLAYERS_FILE,
     STANDINGS_SPOTS,
+    RANKING_METHOD, MIN_DAYS_THRESHOLD, BEST_OF_N_DAYS,
 )
 
 # ─── Bluesky API helpers ───────────────────────────────────────────────────────
@@ -275,24 +276,89 @@ def save_scores(scores: dict):
 
 def scores_for_period(scores: dict, date_keys: list[str]) -> dict:
     """
-    Aggregate daily scores across a period.
-    score = guess number (lower is better); DNF = MAX_SQUARES+1.
-    Returns {handle: {"total": int, "days": int, "avg": float, "best": int, "dnf": int}}.
+    Aggregate raw daily scores across a period.
+    Returns {handle: {"total": int, "days": int, "avg": float, "best": int,
+                       "dnf": int, "daily_scores": list[int]}}.
+    daily_scores preserves each result in date order for Best-N computation.
     """
     agg: dict[str, dict] = defaultdict(
-        lambda: {"total": 0, "days": 0, "best": DNF, "dnf": 0}
+        lambda: {"total": 0, "days": 0, "best": DNF, "dnf": 0, "daily_scores": []}
     )
     for dk in date_keys:
         for handle, score in scores.get(dk, {}).items():
             agg[handle]["total"] += score
             agg[handle]["days"] += 1
-            agg[handle]["best"] = min(agg[handle]["best"], score)   # lower = better
+            agg[handle]["best"] = min(agg[handle]["best"], score)
+            agg[handle]["daily_scores"].append(score)
             if score == DNF:
                 agg[handle]["dnf"] += 1
     for handle in agg:
         d = agg[handle]["days"]
         agg[handle]["avg"] = round(agg[handle]["total"] / d, 2) if d else 0.0
     return dict(agg)
+
+
+def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
+    """
+    Apply the configured RANKING_METHOD to enrich each player's agg entry
+    with a sort key and display stats. Returns enriched agg dict.
+
+    Methods:
+      "total"    — raw total guesses (current behaviour, lower = better)
+      "avg"      — average guess with MIN_DAYS_THRESHOLD floor
+      "adjusted" — average over ALL days, treating unplayed days as DNF
+      "best_n"   — average of best BEST_OF_N_DAYS scores
+      "weighted" — inverted points × participation rate
+    """
+    total_days = len(date_keys)
+
+    for handle, s in agg.items():
+        days     = s["days"]
+        daily    = sorted(s["daily_scores"])          # ascending = best first
+
+        if RANKING_METHOD == "avg":
+            # Exclude players below minimum threshold
+            if MIN_DAYS_THRESHOLD and days < MIN_DAYS_THRESHOLD:
+                s["rank_key"]   = (999, 0)            # sorts to bottom
+                s["rank_stat"]  = f"({days}d — min {MIN_DAYS_THRESHOLD})"
+                s["eligible"]   = False
+            else:
+                s["rank_key"]   = (round(s["avg"], 4), -days)
+                s["rank_stat"]  = f"⌀{s['avg']:.2f}"
+                s["eligible"]   = True
+
+        elif RANKING_METHOD == "adjusted":
+            # Treat unplayed days as DNF (MAX_SQUARES+1)
+            missing = total_days - days
+            adj_total = s["total"] + missing * DNF
+            adj_avg   = round(adj_total / total_days, 4) if total_days else 0
+            s["rank_key"]  = (adj_avg, -days)
+            s["rank_stat"] = f"⌀{adj_avg:.2f}"
+            s["eligible"]  = True
+
+        elif RANKING_METHOD == "best_n":
+            n = BEST_OF_N_DAYS or total_days
+            best_scores = daily[:n]                   # n lowest (best) scores
+            avg = round(sum(best_scores) / len(best_scores), 4) if best_scores else 0
+            s["rank_key"]  = (avg, -days)
+            s["rank_stat"] = f"⌀{avg:.2f} (b{len(best_scores)})"
+            s["eligible"]  = True
+
+        elif RANKING_METHOD == "weighted":
+            # Points = sum(MAX_SQUARES+1 - score) for each day played; DNF = 0 pts
+            pts = sum(max(0, DNF - sc) for sc in s["daily_scores"])
+            rate = days / total_days if total_days else 0
+            weighted = round(pts * rate, 4)
+            s["rank_key"]  = (-weighted, -days)       # higher weighted = better
+            s["rank_stat"] = f"{pts}pts×{rate:.0%}"
+            s["eligible"]  = True
+
+        else:  # "total" (default)
+            s["rank_key"]  = (s["total"], s["dnf"], s["avg"])
+            s["rank_stat"] = None                     # use default display
+            s["eligible"]  = True
+
+    return agg
 
 
 def date_keys_for_week(ref: datetime.date) -> list[str]:
@@ -404,38 +470,71 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     if not agg:
         return [f"No {GAME_NAME} results for {title} yet!"]
 
+    # Enrich agg with ranking keys for the configured method
+    agg = rank_period_agg(agg, date_keys)
+
+    # Sort: eligible players first by rank_key, ineligible at bottom
     all_ranked = sorted(
         agg.items(),
-        key=lambda x: (x[1]["total"], x[1]["dnf"], x[1]["avg"], x[0]),
+        key=lambda x: (
+            0 if x[1].get("eligible", True) else 1,
+            x[1]["rank_key"],
+            x[0],
+        ),
     )
 
-    # Truncate to configured number of spots (0 or None = all players)
-    total_players = len(all_ranked)
-    ranked = all_ranked if not STANDINGS_SPOTS else all_ranked[:STANDINGS_SPOTS]
+    eligible_all   = [r for r in all_ranked if r[1].get("eligible", True)]
+    ineligible_all = [r for r in all_ranked if not r[1].get("eligible", True)]
+    total_players  = len(all_ranked)
+    if STANDINGS_SPOTS:
+        ranked = eligible_all[:STANDINGS_SPOTS] + ineligible_all
+    else:
+        ranked = all_ranked
 
     active_days = sum(1 for dk in date_keys if scores.get(dk))
-    total_days = len(date_keys)
-    n = len(ranked)
-    shown_note = f" (top {n} of {total_players})" if total_players > n else ""
-    footer = f"\n{total_players} player{'s' if total_players != 1 else ''} · {active_days}/{total_days} days played{shown_note}"
+    total_days  = len(date_keys)
+    n_shown     = len([r for r in ranked if r[1].get("eligible", True)])
+    shown_note  = f" (top {n_shown} of {total_players})" if total_players > n_shown else ""
+    method_note = {
+        "avg":      f" · min {MIN_DAYS_THRESHOLD}d to qualify",
+        "adjusted": " · unplayed=DNF",
+        "best_n":   f" · best {BEST_OF_N_DAYS or active_days}/{active_days}d",
+        "weighted": " · pts×participation",
+    }.get(RANKING_METHOD, "")
+    footer = (
+        f"\n{total_players} player{'s' if total_players != 1 else ''}"
+        f" · {active_days}/{total_days} days played"
+        f"{shown_note}{method_note}"
+    )
 
-    # Build all player rows with rank
-    # Use short handle (first segment) and dynamic-width name column for alignment
     short_names = [_short_handle(h) for h, _ in ranked]
-    name_w = max((len(n) for n in short_names), default=8)
+    name_w = max((len(sn) for sn in short_names), default=8)
 
     player_rows = []
-    prev_total = None
-    rank = 0
-    for i, ((handle, s), short) in enumerate(zip(ranked, short_names)):
-        if s["total"] != prev_total:
-            rank = i + 1
-            prev_total = s["total"]
-        dnf_str  = f" {s['dnf']}\u2717" if s["dnf"] else ""   # N✗
-        ace_str  = " \u2b50" if s["best"] == 1 else ""         # ⭐
+    prev_key   = None
+    rank       = 0
+    elig_count = 0
+    for (handle, s), short in zip(ranked, short_names):
+        eligible_row = s.get("eligible", True)
+        if eligible_row:
+            if s["rank_key"] != prev_key:
+                rank     = elig_count + 1
+                prev_key = s["rank_key"]
+            elig_count += 1
+            medal = _medal(rank)
+        else:
+            medal = "—"                        # below threshold, shown but unranked
+
+        dnf_str = f" {s['dnf']}✗" if s["dnf"] else ""
+        ace_str = " ⭐" if s["best"] == 1 else ""
+
+        # Primary stat — method-specific label or fallback to total 🟩
+        stat = s.get("rank_stat")
+        stat_col = stat if stat else f"{s['total']}🟩"
+
         player_rows.append(
-            f"{_medal(rank)} {short:<{name_w}}  "
-            f"{s['total']:>3}🟩  "
+            f"{medal} {short:<{name_w}}  "
+            f"{stat_col}  "
             f"{s['days']}/{active_days}d"
             f"{dnf_str}{ace_str}"
         )
@@ -813,18 +912,18 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                 # Ace! Update count and post congratulations as a reply
                 ace_count = record_ace(aces, author)
                 reaction = make_ace_post(author, display_name, ace_count, current_streak, is_new_best)
-                _post_and_print(f"Ace reaction for @{author}", reaction, session, dry_run, reply_to=post_ref)
+                _post_and_print(f"Ace reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif score == DNF:
                 # Missed every stop — commiserate as a reply
                 reaction = make_dnf_post(author, display_name)
-                _post_and_print(f"DNF reaction for @{author}", reaction, session, dry_run, reply_to=post_ref)
+                _post_and_print(f"DNF reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif 2 <= score <= MAX_SQUARES:
                 # Score-specific reaction for guesses 2–5
                 reaction = make_score_post(author, display_name, score, current_streak, is_new_best)
                 if reaction:
-                    _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref)
+                    _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
     save_aces(aces)
     save_streaks(streaks)
@@ -839,10 +938,12 @@ OPTOUT_TAG = "\n\nDM 'stop' to discontinue replies"
 
 
 def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
-                    reply_to: dict | None = None) -> dict | None:
+                    reply_to: dict | None = None,
+                    is_reaction: bool = False) -> dict | None:
     """Post text and print to log. Returns {"uri": ..., "cid": ...} on success, else None."""
-    # Append opt-out instructions to reaction replies (not leaderboard posts)
-    if reply_to:
+    # Append opt-out instructions only to player reaction replies,
+    # NOT to standings continuation posts which also use reply_to.
+    if reply_to and is_reaction:
         text = text + OPTOUT_TAG
     print(f"\n── {label} ──\n{text}\n" + "─" * 40)
     if not dry_run:
@@ -970,18 +1071,18 @@ def backfill(session: dict | None = None, dry_run: bool = False, date_filter: st
         if score == 1:
             ace_count = record_ace(aces, author)
             reaction = make_ace_post(author, display_name, ace_count)
-            _post_and_print(f"Ace backfill for @{author}", reaction, session, dry_run, reply_to=post_ref)
+            _post_and_print(f"Ace backfill for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
             fired += 1
 
         elif score == DNF:
             reaction = make_dnf_post(author, display_name)
-            _post_and_print(f"DNF backfill for @{author}", reaction, session, dry_run, reply_to=post_ref)
+            _post_and_print(f"DNF backfill for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
             fired += 1
 
         elif 2 <= score <= MAX_SQUARES:
             reaction = make_score_post(author, display_name, score)
             if reaction:
-                _post_and_print(f"Score {score} backfill for @{author}", reaction, session, dry_run, reply_to=post_ref)
+                _post_and_print(f"Score {score} backfill for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
                 fired += 1
 
     save_aces(aces)
