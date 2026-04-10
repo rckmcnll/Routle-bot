@@ -39,6 +39,31 @@ POLL_INTERVAL_MINUTES = 5
 # Posts are automatically split into threaded replies to fit Bluesky's character limit.
 STANDINGS_SPOTS = 10
 
+# ── Ranking method for period standings ────────────────────────────────────────
+# Controls how players are ranked in weekly, monthly, and yearly standings.
+#
+# "total"    Raw total guesses. Lower = better. Rewards playing every day.
+#            (Original behaviour — simple and transparent.)
+#
+# "avg"      Average guesses per day played. Players below MIN_DAYS_THRESHOLD
+#            are shown but marked ineligible (—) and sorted to the bottom.
+#            Rewards skill; use MIN_DAYS_THRESHOLD to ensure fairness.
+#
+# "adjusted" Average across ALL days in the period. Unplayed days count as
+#            a DNF (MAX_SQUARES+1 guesses). Rewards both skill and consistency
+#            without a hard cutoff. Recommended for monthly/yearly.
+#
+# "best_n"   Average of the player's best BEST_OF_N_DAYS scores. Forgives
+#            off days and absences. "Your best 5 of 7 rounds count."
+#            Recommended for weekly. Set BEST_OF_N_DAYS = 0 to use all days.
+#
+# "weighted" Inverted points (first guess = max points) multiplied by
+#            participation rate. Blends skill and attendance smoothly.
+
+RANKING_METHOD      = "best_n"   # "total" | "avg" | "adjusted" | "best_n" | "weighted"
+MIN_DAYS_THRESHOLD  = 3          # Minimum days to be eligible (used by "avg" only)
+BEST_OF_N_DAYS      = 5          # Best N days counted (used by "best_n"; 0 = all days)
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 # Handle to DM when a leaderboard post goes out (set to "" to disable)
 NOTIFY_HANDLE = ""

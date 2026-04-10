@@ -1,42 +1,67 @@
-# 🚌 Routle Leaderboard Bot — v2
+# 🚌 Routle Bot — v3
 
-A Bluesky bot that monitors a [Routle](https://routle.city) feed, tracks scores, and posts daily leaderboards and standings — with reactions, streaks, opt-out support, and a growing Routlers list.
+A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks and aces, manages a Routlers player list, and lets players opt out via DM.
 
-Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxroutl.bsky.social) but easily adaptable to any Routle city feed.
+Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxroutl.bsky.social). Easily adaptable to any Routle city or similar game.
 
 ---
 
-## Features
+## What it does
 
-**Scoring & Leaderboards**
-- Monitors any Bluesky custom feed for Routle result posts
-- Parses emoji grids (`🟩 🟥 ⬛`) to determine guess number — lower is better
-- Posts a daily leaderboard with score distribution histogram
-- Posts weekly, monthly, and yearly standings as threaded posts
-- Standings show short handles in aligned columns with `🟩` score, days played, DNFs, and ⭐ for aces
+### Daily leaderboard
+Posted every day at a configured time. Shows each player's emoji result grid, rank, and a score distribution histogram. Handles Bluesky's 300-character limit gracefully — long player lists are trimmed with an `…and N more` note.
 
-**Reactions** *(replies to each player's result post)*
-- 🟩 Guess 1 — ace congratulations with all-time ace count
-- 🟥🟩 Guesses 2–5 — score-specific commentary
-- 🟥🟥🟥🟥🟥 DNF — commiseration
-- 🔥 Streak callouts for consecutive daily play
-- All messages are Portland-flavored and fully configurable in `config.py`
+```
+🏆 Routle Daily — April 9, 2026
 
-**Player tracking**
-- `aces.json` — all-time first-guess ace counts per player
-- `streaks.json` — current and best consecutive day streaks
-- `known_players.json` — tracks who has been added to the Routlers list
-- Automatically adds new players to a Bluesky curated list
+🟩⬛⬛⬛⬛ 🥇 @busonly
+🟩⬛⬛⬛⬛ 🥇 @willowashmaple
+🟥🟩⬛⬛⬛ 🥉 @rockom
+🟥🟥🟥🟩⬛ 4. @drmitchpdx
 
-**Opt-out**
-- Players DM `stop` to the bot to stop receiving reply reactions
-- Players DM `start` to re-enable
-- Opted-out players are still tracked and appear in leaderboards
-- Opted-out players are not added to the Routlers list
+10 players today!
 
-**Polling**
-- Polls the feed every N minutes (configurable) for near-realtime reactions
-- Leaderboards post on a separate daily/weekly/monthly/yearly schedule
+  1▸ ███████ 7
+  2▸ █ 1
+  4▸ █ 1
+  5▸ █ 1
+```
+
+### Period standings (weekly / monthly / yearly)
+Posted on a schedule as threaded replies. Uses short handles and aligned columns. Long standings split across multiple posts in a thread automatically.
+
+```
+🏆 Routle Weekly Standings — Apr 7–13, 2026
+
+🥇 busonly          ⌀1.40 (b5)  7/7d ⭐
+🥈 willowashmaple   ⌀1.80 (b5)  7/7d ⭐
+🥉 rockom           ⌀2.20 (b5)  6/7d
+4. drmitchpdx        ⌀3.60 (b5)  7/7d 1✗
+
+7 players · 7/7 days played · best 5/7d
+```
+
+### Reactions
+The bot replies to each player's score post with Portland-flavored commentary:
+
+- **Guess 1 (ace)** — celebratory message with all-time ace count
+- **Guesses 2–5** — score-appropriate commentary (close call, solid, long way round, barely made it)
+- **DNF** — commiseration
+- **Streaks** — 🔥 suffix when a player hits 2+ consecutive days, new personal bests called out
+
+All messages are defined in `config.py` — edit freely, add more, no code changes needed.
+
+### Opt-out via DM
+Players DM `stop` to the bot handle to stop receiving reply reactions. The bot confirms with a DM and stops replying. DM `start` to re-enable. Opted-out players still appear in all leaderboards and standings.
+
+### Routlers list
+Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded. Run once to create the list, paste the URI into config, and the bot handles the rest.
+
+### Admin DM notification
+DMs a configurable handle whenever a leaderboard or standings post goes out, with a link to the post.
+
+### Feed polling
+Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence — daily, weekly (configurable day), monthly (1st of month, covers previous month), yearly (Jan 1, covers previous year).
 
 ---
 
@@ -64,17 +89,16 @@ cd routle-bot
 cp config.example.py config.py
 ```
 
-Edit `config.py` and fill in at minimum:
+Edit `config.py`. Required fields:
 
 ```python
-BOT_HANDLE   = "your-bot.bsky.social"
-BOT_PASSWORD = "xxxx-xxxx-xxxx-xxxx"   # App Password with DM access
-FEED_CREATOR_HANDLE = "rockom.bsky.social"
-FEED_SLUG           = "routle"
+BOT_HANDLE          = "your-bot.bsky.social"
+BOT_PASSWORD        = "xxxx-xxxx-xxxx-xxxx"   # App Password with DM access
+FEED_CREATOR_HANDLE = "rockom.bsky.social"     # Owner of the Bluesky feed
+FEED_SLUG           = "routle"                 # Slug from the feed URL
 ```
 
-> **App Password:** Bluesky → Settings → Privacy and Security → App Passwords
-> → Create new → **check "Allow access to your direct messages"**
+> **App Password:** Bluesky → Settings → Privacy and Security → App Passwords → Create new → **check "Allow access to your direct messages"**
 
 ### 3. Create the Routlers list *(optional)*
 
@@ -88,37 +112,38 @@ Copy the printed URI into `config.py` as `ROUTLERS_LIST_URI`.
 
 ```bash
 ./run_bot.sh dry-run
-./run_bot.sh dry-run --period weekly
+./run_bot.sh standings weekly --dry-run
+./run_bot.sh standings custom --dry-run   # all history to now
 ```
 
-### 5. First run — collect history then backfill reactions
+### 5. First run — import history and backfill reactions
 
 ```bash
-./run_bot.sh collect              # Import existing results silently
-./run_bot.sh backfill --dry-run   # Preview what reactions would fire
-./run_bot.sh backfill             # Fire reactions for all existing results
+./run_bot.sh collect              # import existing results silently
+./run_bot.sh backfill --dry-run   # preview what reactions would fire
+./run_bot.sh backfill             # fire reactions for existing results
 ```
 
 ### 6. Start the scheduler
 
 ```bash
-./run_bot.sh start   # Runs in background, polls + posts on schedule
-./run_bot.sh logs    # Follow live output
+./run_bot.sh start   # polls feed + posts leaderboards on schedule
+./run_bot.sh logs    # follow live output
 ```
 
 ---
 
-## Shell script commands
+## Shell script reference
 
 ```
 run          Fetch results + post today's leaderboard (once)
 dry-run      Fetch results + print leaderboard (don't post)
-collect      Fetch & save results only, no leaderboard post
-standings    Post an ad-hoc standings (weekly/monthly/yearly/custom)
+collect      Fetch & save results only, no leaderboard or reactions
+standings    Post an ad-hoc standings (see examples below)
 backfill     Fire reactions for all results already in scores.json
-start        Start the daily scheduler in the background
+start        Start the scheduler in the background
 stop         Stop the background scheduler
-status       Show whether the bot is running + score stats
+status       Show scheduler status + score stats
 logs         Tail the bot log (Ctrl+C to exit)
 install      Set up virtual environment + install dependencies
 create-list  Create the Routlers Bluesky list and print URI for config
@@ -128,124 +153,108 @@ help         Show help
 ### Standings examples
 
 ```bash
+# Preview without posting
 ./run_bot.sh standings weekly --dry-run
+./run_bot.sh standings monthly --dry-run
+./run_bot.sh standings yearly --dry-run
+
+# Post immediately
+./run_bot.sh standings weekly
 ./run_bot.sh standings monthly
 ./run_bot.sh standings yearly
-./run_bot.sh standings custom                          # all history to now
-./run_bot.sh standings custom --from 2026-04-01        # from date to now
+
+# Custom date range
+./run_bot.sh standings custom                               # all history to now
+./run_bot.sh standings custom --from 2026-04-01            # from date to now
 ./run_bot.sh standings custom --from 2026-04-01 --to 2026-04-09
+./run_bot.sh standings custom --from 2026-04-01 --dry-run  # preview
 ```
 
 ---
 
 ## Configuration reference
 
+### Core
+
 | Setting | Default | Description |
 |---|---|---|
 | `BOT_HANDLE` | — | Bluesky handle of the bot account |
-| `BOT_PASSWORD` | — | App Password (needs DM access) |
-| `FEED_CREATOR_HANDLE` | — | Handle of the feed generator owner |
+| `BOT_PASSWORD` | — | App Password (must have DM access) |
+| `FEED_CREATOR_HANDLE` | — | Handle of the Bluesky feed generator owner |
 | `FEED_SLUG` | — | Slug from the feed URL (`/feed/<slug>`) |
-| `GAME_NAME` | `Routle` | Game name, matched in post text |
-| `MAX_SQUARES` | `5` | Number of guess squares |
-| `LEADERBOARD_TIME` | `21:00` | Daily leaderboard post time (24h local) |
-| `WEEKLY_LEADERBOARD_DAY` | `6` | Day for weekly standings (0=Mon, 6=Sun) |
-| `POLL_INTERVAL_MINUTES` | `5` | How often to check feed for new results |
-| `STANDINGS_SPOTS` | `10` | Players shown in standings (0 = all) |
-| `NOTIFY_HANDLE` | `""` | Handle to DM when a leaderboard posts |
-| `ROUTLERS_LIST_URI` | `""` | AT-URI of the Routlers curated list |
-| `SCORES_FILE` | `scores.json` | Daily scores storage |
+| `GAME_NAME` | `Routle` | Game name — matched in post text |
+| `MAX_SQUARES` | `5` | Number of guess squares in the game |
+
+### Schedule
+
+| Setting | Default | Description |
+|---|---|---|
+| `LEADERBOARD_TIME` | `21:00` | Time for daily leaderboard and period standings (24h local) |
+| `WEEKLY_LEADERBOARD_DAY` | `6` | Day of week for weekly standings (0=Mon … 6=Sun) |
+| `POLL_INTERVAL_MINUTES` | `5` | How often to check the feed for new results |
+
+### Standings
+
+| Setting | Default | Description |
+|---|---|---|
+| `STANDINGS_SPOTS` | `10` | Players shown per standings (0 or None = all) |
+| `RANKING_METHOD` | `best_n` | Ranking algorithm — see below |
+| `MIN_DAYS_THRESHOLD` | `3` | Min days to qualify (used by `avg` only) |
+| `BEST_OF_N_DAYS` | `5` | Best N days counted (used by `best_n`; 0 = all days) |
+
+### Ranking methods
+
+| Method | How it works | Best for |
+|---|---|---|
+| `total` | Raw total guesses. Lower = better. | Simple transparency |
+| `avg` | Average guesses per day played. Players below `MIN_DAYS_THRESHOLD` are shown but unranked (—). | Skill-first with a fairness floor |
+| `adjusted` | Average across all days. Unplayed days count as DNF. | Monthly/yearly — balances skill and consistency |
+| `best_n` | Average of best `BEST_OF_N_DAYS` scores. Off days and absences forgiven. | Weekly — "your best 5 of 7 count" |
+| `weighted` | Inverted points × participation rate. | Smooth skill + attendance blend |
+
+### Storage & integrations
+
+| Setting | Default | Description |
+|---|---|---|
+| `NOTIFY_HANDLE` | `""` | Handle to DM when a leaderboard posts (set `""` to disable) |
+| `ROUTLERS_LIST_URI` | `""` | AT-URI of the Routlers curated list (set `""` to disable) |
+| `SCORES_FILE` | `scores.json` | Daily scores |
 | `ACES_FILE` | `aces.json` | All-time ace counts |
 | `STREAKS_FILE` | `streaks.json` | Consecutive day streaks |
 | `OPTOUTS_FILE` | `optouts.json` | Opted-out handles |
-| `KNOWN_PLAYERS_FILE` | `known_players.json` | Players added to Routlers list |
+| `KNOWN_PLAYERS_FILE` | `known_players.json` | Players already added to Routlers list |
 
 ---
 
 ## Customizing messages
 
-All reaction messages live at the bottom of `config.py` — no code changes needed.
+All reaction messages live at the bottom of `config.py`. Edit freely — the bot picks randomly from each list on every reaction. Add entries for variety, remove any you don't want. No code changes needed.
 
-| List | When used | Placeholders |
+| List | Fired when | Placeholders |
 |---|---|---|
 | `ACE_MESSAGES` | First-guess ace | `{display_name}`, `{handle}`, `{aces_line}` |
 | `ACE_COUNT_LINES` | Appended to ace messages | `{aces}` |
-| `DNF_MESSAGES` | All guesses wrong | `{display_name}`, `{handle}` |
-| `SCORE_MESSAGES[2..5]` | Guesses 2–5 | `{display_name}`, `{handle}` |
+| `DNF_MESSAGES` | All guesses wrong (all 🟥) | `{display_name}`, `{handle}` |
+| `SCORE_MESSAGES[2]` | Got it on guess 2 | `{display_name}`, `{handle}` |
+| `SCORE_MESSAGES[3]` | Got it on guess 3 | `{display_name}`, `{handle}` |
+| `SCORE_MESSAGES[4]` | Got it on guess 4 | `{display_name}`, `{handle}` |
+| `SCORE_MESSAGES[5]` | Got it on guess 5 | `{display_name}`, `{handle}` |
 
-Add more entries to any list to increase variety. The bot picks randomly from each list.
-
----
-
-## Post examples
-
-**Daily leaderboard**
-```
-🏆 Routle Daily — April 9, 2026
-
-🟩⬛⬛⬛⬛ 🥇 @busonly
-🟩⬛⬛⬛⬛ 🥇 @willowashmaple
-🟥🟩⬛⬛⬛ 🥉 @rockom
-🟥🟥🟥🟩⬛ 4. @drmitchpdx
-
-4 players today!
-
-  1▸ ██ 2
-  2▸ █ 1
-  4▸ █ 1
-```
-
-**Weekly standings**
-```
-🏆 Routle Weekly Standings — Apr 7–13, 2026
-
-🥇 busonly          12🟩  7/7d ⭐
-🥈 willowashmaple   18🟩  7/7d ⭐
-🥉 rockom           21🟩  6/7d 1✗
-4. drmitchpdx        29🟩  5/7d 2✗
-
-4 players · 7/7 days played
-```
-
-**Ace reaction** *(reply to player's post)*
-```
-🚨 STOP EVERYTHING. Rockom Sockom got a FIRST GUESS ACE.
-The MAX has been rerouted in their honor.
-
-Career ace #7! See you at the top of the leaderboard
-and also Pittock Mansion. 🔥 3 days in a row!
-
-DM 'stop' to discontinue replies
-```
-
----
-
-## Adapting to another city
-
-Change these settings in `config.py`:
-
-```python
-FEED_CREATOR_HANDLE = "feedcreator.bsky.social"
-FEED_SLUG           = "routle-seattle"
-GAME_NAME           = "Routle"
-GAME_DOMAIN         = "routle.city"
-```
-
-The message lists reference Portland landmarks — swap them out for your city's flavor.
+Streak suffixes are appended automatically when relevant — you don't need to add them to messages.
 
 ---
 
 ## Data files
 
-| File | Contents | Safe to edit? |
-|---|---|---|
-| `scores.json` | `{"YYYY-MM-DD": {"handle": guess_number}}` | Yes |
-| `aces.json` | `{"handle": count}` | Yes |
-| `streaks.json` | `{"handle": {"current": N, "best": N, "last_date": "..."}}` | Yes |
-| `optouts.json` | `["handle", ...]` | Yes |
-| `known_players.json` | `{"handle": "did:plc:..."}` | Yes |
+All files are created automatically on first run. Safe to edit manually to correct mistakes.
 
-All files are created automatically on first run.
+| File | Contents |
+|---|---|
+| `scores.json` | `{"YYYY-MM-DD": {"handle": guess_number}}` |
+| `aces.json` | `{"handle": total_ace_count}` |
+| `streaks.json` | `{"handle": {"current": N, "best": N, "last_date": "YYYY-MM-DD"}}` |
+| `optouts.json` | `["handle", ...]` |
+| `known_players.json` | `{"handle": "did:plc:..."}` |
 
 ---
 
@@ -253,7 +262,7 @@ All files are created automatically on first run.
 
 ```ini
 [Unit]
-Description=Routle Leaderboard Bot
+Description=Routle Bot
 After=network.target
 
 [Service]
@@ -264,6 +273,35 @@ RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
+```
+
+---
+
+## Adapting to another city
+
+```python
+FEED_CREATOR_HANDLE = "feedowner.bsky.social"
+FEED_SLUG           = "routle-chicago"
+GAME_NAME           = "Routle"
+GAME_DOMAIN         = "routle.city"
+```
+
+Then update the message lists in `config.py` with your city's local references.
+
+---
+
+## File structure
+
+```
+routle-bot/
+├── routle_bot.py        # Core bot — scoring, reactions, leaderboards, DM handling
+├── run_scheduler.py     # Continuous scheduler — polls feed + fires leaderboards
+├── run_bot.sh           # Shell interface for all commands
+├── config.example.py    # Template — copy to config.py and fill in
+├── requirements.txt     # requests>=2.31.0
+├── .gitignore           # Excludes config.py, *.json data files, .venv, logs
+├── LICENSE              # MIT
+└── README.md
 ```
 
 ---
