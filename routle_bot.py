@@ -22,6 +22,7 @@ from config import (
     WEEKLY_LEADERBOARD_DAY,
     SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE,
     ROUTLERS_LIST_URI, KNOWN_PLAYERS_FILE,
+    PIN_LEADERBOARD,
     STANDINGS_SPOTS,
     RANKING_METHOD, MIN_DAYS_THRESHOLD, BEST_OF_N_DAYS,
 )
@@ -932,6 +933,55 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
     return new_entries
 
 
+# ─── Profile pin ──────────────────────────────────────────────────────────────
+
+def pin_post(session: dict, post_uri: str, post_cid: str) -> bool:
+    """
+    Pin a post to the bot's Bluesky profile by updating the actor profile record.
+    Returns True on success.
+    """
+    token = session["accessJwt"]
+    did   = session["did"]
+
+    # Fetch the current profile record so we don't overwrite other fields
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/com.atproto.repo.getRecord",
+            params={"repo": did, "collection": "app.bsky.actor.profile", "rkey": "self"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        current = resp.json().get("value", {})
+        swap_cid = resp.json().get("cid")          # needed for compare-and-swap
+    except Exception as e:
+        print(f"  ⚠ Could not fetch profile record: {e}")
+        return False
+
+    # Merge pinnedPost into the existing profile record
+    current["pinnedPost"] = {"uri": post_uri, "cid": post_cid}
+    current.setdefault("$type", "app.bsky.actor.profile")
+
+    try:
+        body = {
+            "repo": did,
+            "collection": "app.bsky.actor.profile",
+            "rkey": "self",
+            "record": current,
+        }
+        if swap_cid:
+            body["swapRecord"] = swap_cid          # atomic compare-and-swap
+
+        requests.post(
+            f"{BASE_URL}/com.atproto.repo.putRecord",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        ).raise_for_status()
+        return True
+    except Exception as e:
+        print(f"  ⚠ Could not pin post: {e}")
+        return False
+
+
 # ─── Posting helpers ───────────────────────────────────────────────────────────
 
 OPTOUT_TAG = "\n\nDM 'stop' to discontinue replies"
@@ -939,7 +989,8 @@ OPTOUT_TAG = "\n\nDM 'stop' to discontinue replies"
 
 def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
                     reply_to: dict | None = None,
-                    is_reaction: bool = False) -> dict | None:
+                    is_reaction: bool = False,
+                    pin: bool = True) -> dict | None:
     """Post text and print to log. Returns {"uri": ..., "cid": ...} on success, else None."""
     # Append opt-out instructions only to player reaction replies,
     # NOT to standings continuation posts which also use reply_to.
@@ -951,7 +1002,7 @@ def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
         uri = result.get("uri", "")
         cid = result.get("cid", "")
         print(f"✅ Posted! URI: {uri}")
-        # DM the notify handle when a top-level leaderboard post goes out
+        # For top-level leaderboard posts (not reactions or continuations)
         if not reply_to:
             from config import NOTIFY_HANDLE
             if NOTIFY_HANDLE:
@@ -962,20 +1013,26 @@ def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
                     dm_text += f"\n{post_url}"
                 send_dm(session, NOTIFY_HANDLE, dm_text)
                 print(f"  📨 Notified @{NOTIFY_HANDLE}")
+            # Pin post to bot profile if configured and allowed
+            if pin and PIN_LEADERBOARD and uri and cid:
+                if pin_post(session, uri, cid):
+                    print(f"  📌 Pinned to profile")
+                # (failure already logged inside pin_post)
         return {"uri": uri, "cid": cid}
     else:
         print("  (dry run — not posted)")
         return None
 
 
-def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool):
+def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, pin: bool = True):
     """
     Post a period standings. First page is a top-level post;
     subsequent pages are threaded as replies, each replying to the previous.
+    pin: whether to pin the first page to the bot profile (False for ad-hoc posts).
     """
     if not pages:
         return
-    result = _post_and_print(label, pages[0], session, dry_run)
+    result = _post_and_print(label, pages[0], session, dry_run, pin=pin)
     if len(pages) == 1:
         return
     # Thread continuation pages as replies to the previous post
@@ -1156,7 +1213,7 @@ def run_standings(
         print(f"❌ Unknown period: {period}")
         return
 
-    _post_standings(period.capitalize(), pages, session, dry_run)
+    _post_standings(period.capitalize(), pages, session, dry_run, pin=False)
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────

@@ -65,6 +65,10 @@ MIN_DAYS_THRESHOLD  = 3          # Minimum days to be eligible (used by "avg" on
 BEST_OF_N_DAYS      = 5          # Best N days counted (used by "best_n"; 0 = all days)
 
 # ── Storage ───────────────────────────────────────────────────────────────────
+# Pin the leaderboard post to the bot's profile after posting
+# Each new leaderboard replaces the previous pin
+PIN_LEADERBOARD = True
+
 # Handle to DM when a leaderboard post goes out (set to "" to disable)
 NOTIFY_HANDLE = ""
 
