@@ -20,11 +20,13 @@ from config import (
     GAME_NAME, GAME_DOMAIN,
     MAX_SQUARES, LEADERBOARD_TIME,
     WEEKLY_LEADERBOARD_DAY,
-    SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE,
+    SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE, DNF_COUNTS_FILE,
     ROUTLERS_LIST_URI, KNOWN_PLAYERS_FILE,
     PIN_LEADERBOARD,
     STANDINGS_SPOTS,
     RANKING_METHOD, MIN_DAYS_THRESHOLD, BEST_OF_N_DAYS,
+    WEEKLY_RANKING_METHOD, MONTHLY_RANKING_METHOD,
+    YEARLY_RANKING_METHOD, CUSTOM_RANKING_METHOD,
 )
 
 # ─── Bluesky API helpers ───────────────────────────────────────────────────────
@@ -299,10 +301,10 @@ def scores_for_period(scores: dict, date_keys: list[str]) -> dict:
     return dict(agg)
 
 
-def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
+def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) -> dict:
     """
-    Apply the configured RANKING_METHOD to enrich each player's agg entry
-    with a sort key and display stats. Returns enriched agg dict.
+    Apply ranking to enrich each player's agg entry with sort key and display stats.
+    method overrides RANKING_METHOD when provided (used for per-period config).
 
     Methods:
       "total"    — raw total guesses (current behaviour, lower = better)
@@ -312,12 +314,13 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
       "weighted" — inverted points × participation rate
     """
     total_days = len(date_keys)
+    effective_method = method or RANKING_METHOD
 
     for handle, s in agg.items():
         days     = s["days"]
         daily    = sorted(s["daily_scores"])          # ascending = best first
 
-        if RANKING_METHOD == "avg":
+        if effective_method == "avg":
             # Exclude players below minimum threshold
             if MIN_DAYS_THRESHOLD and days < MIN_DAYS_THRESHOLD:
                 s["rank_key"]   = (999, 0)            # sorts to bottom
@@ -328,7 +331,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
                 s["rank_stat"]  = f"⌀{s['avg']:.2f}"
                 s["eligible"]   = True
 
-        elif RANKING_METHOD == "adjusted":
+        elif effective_method == "adjusted":
             # Treat unplayed days as DNF (MAX_SQUARES+1)
             missing = total_days - days
             adj_total = s["total"] + missing * DNF
@@ -337,7 +340,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"⌀{adj_avg:.2f}"
             s["eligible"]  = True
 
-        elif RANKING_METHOD == "best_n":
+        elif effective_method == "best_n":
             n = BEST_OF_N_DAYS or total_days
             best_scores = daily[:n]                   # n lowest (best) scores
             avg = round(sum(best_scores) / len(best_scores), 4) if best_scores else 0
@@ -345,7 +348,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"⌀{avg:.2f} (b{len(best_scores)})"
             s["eligible"]  = True
 
-        elif RANKING_METHOD == "weighted":
+        elif effective_method == "weighted":
             # Points = sum(MAX_SQUARES+1 - score) for each day played; DNF = 0 pts
             pts = sum(max(0, DNF - sc) for sc in s["daily_scores"])
             rate = days / total_days if total_days else 0
@@ -354,7 +357,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"{pts}pts×{rate:.0%}"
             s["eligible"]  = True
 
-        else:  # "total" (default)
+        else:  # "total" (default) or unrecognised
             s["rank_key"]  = (s["total"], s["dnf"], s["avg"])
             s["rank_stat"] = None                     # use default display
             s["eligible"]  = True
@@ -463,7 +466,7 @@ def format_daily_leaderboard(date_str: str, day_scores: dict) -> str:
     return header + footer  # extreme fallback
 
 
-def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: list[str]) -> list[str]:
+def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: list[str], method: str | None = None) -> list[str]:
     """
     Format a period standings post, split into pages of STANDINGS_PAGE_SIZE players.
     Returns a list of strings — first is the main post, rest are continuation replies.
@@ -472,7 +475,7 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
         return [f"No {GAME_NAME} results for {title} yet!"]
 
     # Enrich agg with ranking keys for the configured method
-    agg = rank_period_agg(agg, date_keys)
+    agg = rank_period_agg(agg, date_keys, method=method)
 
     # Sort: eligible players first by rank_key, ineligible at bottom
     all_ranked = sorted(
@@ -496,6 +499,7 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     total_days  = len(date_keys)
     n_shown     = len([r for r in ranked if r[1].get("eligible", True)])
     shown_note  = f" (top {n_shown} of {total_players})" if total_players > n_shown else ""
+    _eff = agg[next(iter(agg))].get("_method", RANKING_METHOD) if agg else RANKING_METHOD
     method_note = {
         "avg":      f" · min {MIN_DAYS_THRESHOLD}d to qualify",
         "adjusted": " · unplayed=DNF",
@@ -586,19 +590,19 @@ def format_weekly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     monday = ref - datetime.timedelta(days=ref.weekday())
     sunday = monday + datetime.timedelta(days=6)
     label = f"Weekly Standings — {monday.strftime('%b %-d')}–{sunday.strftime('%-d, %Y')}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=WEEKLY_RANKING_METHOD)
 
 
 def format_monthly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     keys = date_keys_for_month(ref)
     label = f"Monthly Standings — {ref.strftime('%B %Y')}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=MONTHLY_RANKING_METHOD)
 
 
 def format_yearly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     keys = date_keys_for_year(ref)
     label = f"Yearly Standings — {ref.year}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=YEARLY_RANKING_METHOD)
 
 
 # ─── Ace tracking ─────────────────────────────────────────────────────────────
@@ -806,6 +810,66 @@ def record_ace(aces: dict, handle: str) -> int:
     return aces[handle]
 
 
+# ─── DNF count tracking ───────────────────────────────────────────────────────
+
+def load_dnf_counts() -> dict:
+    """Load DNF counts. Structure: {"handle": int}"""
+    if os.path.exists(DNF_COUNTS_FILE):
+        with open(DNF_COUNTS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_dnf_counts(dnf_counts: dict):
+    with open(DNF_COUNTS_FILE, "w") as f:
+        json.dump(dnf_counts, f, indent=2, sort_keys=True)
+
+
+def record_dnf(dnf_counts: dict, handle: str) -> int:
+    """Increment DNF count for handle, return new total."""
+    dnf_counts[handle] = dnf_counts.get(handle, 0) + 1
+    return dnf_counts[handle]
+
+
+def games_played_count(scores: dict, handle: str) -> int:
+    """Count total games played by handle across all dates in scores.json."""
+    return sum(1 for day in scores.values() if handle in day)
+
+
+# ─── Milestone detection ───────────────────────────────────────────────────────
+
+ACE_MILESTONES    = {5, 10, 25, 50, 100, 200, 500}
+GAMES_MILESTONES  = {3, 7, 25, 50, 100, 200, 300, 365}
+DNF_MILESTONE_EVERY = 5   # fire every N DNFs
+
+
+def is_ace_milestone(count: int) -> bool:
+    return count in ACE_MILESTONES or (count >= 100 and count % 100 == 0)
+
+
+def is_games_milestone(count: int) -> bool:
+    return count in GAMES_MILESTONES
+
+
+def is_dnf_milestone(count: int) -> bool:
+    return count > 0 and count % DNF_MILESTONE_EVERY == 0
+
+
+def make_milestone_post(handle: str, display_name: str,
+                        kind: str, count: int) -> str:
+    """
+    Build a milestone message. kind is "ace", "games", or "dnf".
+    Falls back gracefully if no messages configured.
+    """
+    from config import MILESTONE_MESSAGES
+    pool = MILESTONE_MESSAGES.get(kind, [])
+    if not pool:
+        return ""
+    return random.choice(pool).format(
+        display_name=display_name, handle=handle, count=count
+    )
+
+
 # ─── Reaction messages ─────────────────────────────────────────────────────────
 
 import random
@@ -822,13 +886,13 @@ def _ace_count_line(aces: int) -> str:
 def _streak_suffix(current_streak: int, is_new_best: bool) -> str:
     """Return a streak note to append to reactions, or empty string."""
     if current_streak >= 2 and is_new_best:
-        return f" 🔥 New best streak: {current_streak} days in a row!"
+        return f"\n\n🔥 New best streak: {current_streak} days in a row!"
     if current_streak >= 7:
-        return f" 🔥 {current_streak}-day streak!!"
+        return f"\n\n🔥 {current_streak}-day streak!!"
     if current_streak >= 3:
-        return f" 🔥 {current_streak} days in a row!"
+        return f"\n\n🔥 {current_streak} days in a row!"
     if current_streak == 2:
-        return " 🔥 2 days running!"
+        return "\n\n🔥 2 days running!"
     return ""
 
 
@@ -871,6 +935,7 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
     print(f"  Retrieved {len(feed)} post(s).")
 
     aces = load_aces()
+    dnf_counts = load_dnf_counts()
     streaks = load_streaks()
     optouts = load_optouts()
     known = load_known_players()
@@ -909,16 +974,34 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                 print(f"  (skipping reaction — @{author} opted out)")
                 continue
 
+            # Games played milestone check (applies to all scores)
+            total_games = games_played_count(scores, author)
+            if is_games_milestone(total_games):
+                milestone_msg = make_milestone_post(author, display_name, "games", total_games)
+                if milestone_msg:
+                    _post_and_print(f"Games milestone ({total_games}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
+
             if score == 1:
                 # Ace! Update count and post congratulations as a reply
                 ace_count = record_ace(aces, author)
                 reaction = make_ace_post(author, display_name, ace_count, current_streak, is_new_best)
                 _post_and_print(f"Ace reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
+                # Ace milestone check
+                if is_ace_milestone(ace_count):
+                    milestone_msg = make_milestone_post(author, display_name, "ace", ace_count)
+                    if milestone_msg:
+                        _post_and_print(f"Ace milestone ({ace_count}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif score == DNF:
                 # Missed every stop — commiserate as a reply
+                dnf_count = record_dnf(dnf_counts, author)
                 reaction = make_dnf_post(author, display_name)
                 _post_and_print(f"DNF reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
+                # DNF milestone check
+                if is_dnf_milestone(dnf_count):
+                    milestone_msg = make_milestone_post(author, display_name, "dnf", dnf_count)
+                    if milestone_msg:
+                        _post_and_print(f"DNF milestone ({dnf_count}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif 2 <= score <= MAX_SQUARES:
                 # Score-specific reaction for guesses 2–5
@@ -927,6 +1010,7 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                     _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
     save_aces(aces)
+    save_dnf_counts(dnf_counts)
     save_streaks(streaks)
     save_known_players(known)
     print(f"  {new_entries} new result(s) recorded.")
@@ -1199,7 +1283,7 @@ def run_standings(
         date_keys = [(start + datetime.timedelta(days=i)).isoformat() for i in range(delta)]
         label = f"Standings — {start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
         agg = scores_for_period(scores, date_keys)
-        pages = format_period_leaderboard(label, agg, scores, date_keys)
+        pages = format_period_leaderboard(label, agg, scores, date_keys, method=CUSTOM_RANKING_METHOD)
     elif period == "weekly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_weekly_leaderboard(ref, scores)
