@@ -11,6 +11,8 @@ e.g.              https://bsky.app/profile/rockom.bsky.social/feed/routle
 import re
 import json
 import os
+import time
+import random
 import datetime
 import requests
 from collections import defaultdict
@@ -38,6 +40,7 @@ def login(handle: str, password: str) -> dict:
     resp = requests.post(
         f"{BASE_URL}/com.atproto.server.createSession",
         json={"identifier": handle, "password": password},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -48,6 +51,7 @@ def resolve_did(handle: str, token: str) -> str:
         f"{BASE_URL}/com.atproto.identity.resolveHandle",
         params={"handle": handle},
         headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()["did"]
@@ -69,6 +73,7 @@ def get_custom_feed(feed_uri: str, token: str, limit: int = 100) -> list:
             f"{BASE_URL}/app.bsky.feed.getFeed",
             params=params,
             headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -79,10 +84,14 @@ def get_custom_feed(feed_uri: str, token: str, limit: int = 100) -> list:
     return posts[:limit]
 
 
-def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
+def post_text(text: str, session: dict,
+              reply_to: dict | None = None,
+              root_ref: dict | None = None) -> dict:
     """
-    Create a post. If reply_to is provided, post as a reply.
-    reply_to should be {"uri": "at://...", "cid": "..."} from the parent post.
+    Create a post.
+    reply_to : the immediate parent post {"uri": ..., "cid": ...}
+    root_ref : the thread root post (defaults to reply_to for direct replies,
+               must be set explicitly for deeper thread replies)
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
@@ -92,8 +101,9 @@ def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
         "langs": ["en-US"],
     }
     if reply_to:
-        ref = {"uri": reply_to["uri"], "cid": reply_to["cid"]}
-        record["reply"] = {"root": ref, "parent": ref}
+        parent = {"uri": reply_to["uri"], "cid": reply_to["cid"]}
+        root   = {"uri": root_ref["uri"], "cid": root_ref["cid"]} if root_ref else parent
+        record["reply"] = {"root": root, "parent": parent}
     resp = requests.post(
         f"{BASE_URL}/com.atproto.repo.createRecord",
         json={
@@ -102,6 +112,7 @@ def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
             "record": record,
         },
         headers={"Authorization": f"Bearer {session['accessJwt']}"},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -170,8 +181,10 @@ def load_known_players() -> dict:
 
 
 def save_known_players(known: dict):
-    with open(KNOWN_PLAYERS_FILE, "w") as f:
+    _tmp = KNOWN_PLAYERS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(known, f, indent=2, sort_keys=True)
+    os.replace(_tmp, KNOWN_PLAYERS_FILE)
 
 
 def maybe_add_to_routlers(session: dict, handle: str, did: str,
@@ -206,10 +219,12 @@ def maybe_add_to_routlers(session: dict, handle: str, did: str,
 #   04/08/2026
 #   🟩 ⬛ ⬛ ⬛ ⬛
 #   www.routle.city/trimet
+# Tolerant match: allows extra spaces, \r\n line endings, and minor formatting
+# variations between the game name, date, and emoji grid lines.
 RESULT_RE = re.compile(
-    rf"{re.escape(GAME_NAME)}[^\n]*\n"
-    r"(\d{2}/\d{2}/\d{4})\n"
-    r"([\U0001F7E9\u2B1B\U0001F7E8\U0001F7E5\U0001F7EA\s]+)",
+    rf"{re.escape(GAME_NAME)}[^\n]*\r?\n"
+    r"[ \t]*(\d{2}/\d{2}/\d{4})[ \t]*\r?\n"
+    r"([ \t\U0001F7E9\u2B1B\U0001F7E8\U0001F7E5\U0001F7EA]+)",
     re.IGNORECASE,
 )
 
@@ -271,8 +286,10 @@ def load_scores() -> dict:
 
 
 def save_scores(scores: dict):
-    with open(SCORES_FILE, "w") as f:
+    _tmp = SCORES_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(scores, f, indent=2, sort_keys=True)
+    os.replace(_tmp, SCORES_FILE)
 
 
 # ─── Score aggregation ─────────────────────────────────────────────────────────
@@ -616,8 +633,10 @@ def load_aces() -> dict:
 
 
 def save_aces(aces: dict):
-    with open(ACES_FILE, "w") as f:
+    _tmp = ACES_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(aces, f, indent=2, sort_keys=True)
+    os.replace(_tmp, ACES_FILE)
 
 
 # ─── Streak tracking ──────────────────────────────────────────────────────────
@@ -631,8 +650,10 @@ def load_streaks() -> dict:
 
 
 def save_streaks(streaks: dict):
-    with open(STREAKS_FILE, "w") as f:
+    _tmp = STREAKS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(streaks, f, indent=2, sort_keys=True)
+    os.replace(_tmp, STREAKS_FILE)
 
 
 def update_streak(streaks: dict, handle: str, date_str: str) -> tuple[int, int, bool]:
@@ -680,8 +701,10 @@ def load_optouts() -> set:
 
 
 def save_optouts(optouts: set):
-    with open(OPTOUTS_FILE, "w") as f:
+    _tmp = OPTOUTS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(sorted(optouts), f, indent=2)
+    os.replace(_tmp, OPTOUTS_FILE)
 
 
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
@@ -821,8 +844,10 @@ def load_dnf_counts() -> dict:
 
 
 def save_dnf_counts(dnf_counts: dict):
-    with open(DNF_COUNTS_FILE, "w") as f:
+    _tmp = DNF_COUNTS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(dnf_counts, f, indent=2, sort_keys=True)
+    os.replace(_tmp, DNF_COUNTS_FILE)
 
 
 def record_dnf(dnf_counts: dict, handle: str) -> int:
@@ -871,8 +896,6 @@ def make_milestone_post(handle: str, display_name: str,
 
 
 # ─── Reaction messages ─────────────────────────────────────────────────────────
-
-import random
 
 # Messages are defined in config.py — edit them there.
 # Templates support: {handle}, {aces_line} (ace messages) or {handle} (DNF messages).
@@ -1068,24 +1091,61 @@ def pin_post(session: dict, post_uri: str, post_cid: str) -> bool:
 
 # ─── Posting helpers ───────────────────────────────────────────────────────────
 
-OPTOUT_TAG = "\n\nDM 'stop' to discontinue replies"
+OPTOUT_TAG   = "\n\nDM 'stop' to discontinue replies"
+MAX_RETRIES  = 3     # attempts before giving up on a single post
+RETRY_DELAY  = 3.0   # seconds between retry attempts
+
+
+def _post_with_retry(text: str, session: dict,
+                     reply_to: dict | None = None,
+                     root_ref: dict | None = None) -> dict | None:
+    """
+    Call post_text with up to MAX_RETRIES attempts on transient errors.
+    Returns the result dict on success, None if all attempts fail.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return post_text(text, session, reply_to=reply_to, root_ref=root_ref)
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                print(f"  ⚠ Post attempt {attempt}/{MAX_RETRIES} failed: {e} — retrying in {RETRY_DELAY}s")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"  ❌ Post failed after {MAX_RETRIES} attempts: {e}")
+    return None
 
 
 def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
                     reply_to: dict | None = None,
+                    root_ref: dict | None = None,
                     is_reaction: bool = False,
                     pin: bool = True) -> dict | None:
-    """Post text and print to log. Returns {"uri": ..., "cid": ...} on success, else None."""
+    """
+    Post text, confirm it is indexed in the AppView, and return the ref.
+    Returns {"uri": ..., "cid": ...} on success, None on failure or dry_run.
+    """
     # Append opt-out instructions only to player reaction replies,
     # NOT to standings continuation posts which also use reply_to.
     if reply_to and is_reaction:
         text = text + OPTOUT_TAG
     print(f"\n── {label} ──\n{text}\n" + "─" * 40)
     if not dry_run:
-        result = post_text(text, session, reply_to=reply_to)
+        result = _post_with_retry(text, session, reply_to=reply_to, root_ref=root_ref)
+        if not result:
+            return None
         uri = result.get("uri", "")
         cid = result.get("cid", "")
         print(f"✅ Posted! URI: {uri}")
+
+        # Read-confirm: verify the post is visible in the AppView before returning.
+        # This is critical for threading — the next reply must be able to find its parent.
+        if uri:
+            confirmed = _await_indexed(uri, session["accessJwt"])
+            if confirmed:
+                print(f"  ✓ Confirmed indexed")
+            else:
+                print(f"  ⚠ Could not confirm indexing (timed out) — thread may break")
+
         # For top-level leaderboard posts (not reactions or continuations)
         if not reply_to:
             from config import NOTIFY_HANDLE
@@ -1108,22 +1168,55 @@ def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
         return None
 
 
+def _await_indexed(uri: str, token: str, timeout: int = 30, interval: float = 2.0) -> bool:
+    """
+    Poll app.bsky.feed.getPosts until the post appears in the AppView or timeout.
+    Returns True if found, False if timed out.
+    """
+    deadline = time.time() + timeout
+    headers = {"Authorization": f"Bearer {token}"}
+    while time.time() < deadline:
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/app.bsky.feed.getPosts",
+                params={"uris": uri},
+                headers=headers,
+                timeout=5,
+            )
+            if resp.ok and resp.json().get("posts"):
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
 def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, pin: bool = True):
     """
     Post a period standings. First page is a top-level post;
     subsequent pages are threaded as replies, each replying to the previous.
     pin: whether to pin the first page to the bot profile (False for ad-hoc posts).
+    After each post we poll the AppView until it confirms the post is indexed
+    before posting the next reply — this prevents broken thread chains.
     """
     if not pages:
         return
-    result = _post_and_print(label, pages[0], session, dry_run, pin=pin)
+    # Post page 1 — this becomes the thread root
+    root_result = _post_and_print(label, pages[0], session, dry_run, pin=pin)
     if len(pages) == 1:
         return
-    # Thread continuation pages as replies to the previous post
-    prev_ref = result  # {"uri": ..., "cid": ...} or None in dry_run
+
+    # root_ref stays fixed as page 1 for the whole thread.
+    # prev_ref advances to each new post so parent chains correctly.
+    root_ref = root_result
+    prev_ref = root_result
+
     for i, page in enumerate(pages[1:], 2):
         cont_label = f"{label} cont. ({i}/{len(pages)})"
-        prev_ref = _post_and_print(cont_label, page, session, dry_run, reply_to=prev_ref)
+        prev_ref = _post_and_print(
+            cont_label, page, session, dry_run,
+            reply_to=prev_ref, root_ref=root_ref,
+        )
 
 
 # ─── Public run functions (used by scheduler + CLI) ────────────────────────────
