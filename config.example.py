@@ -37,7 +37,7 @@ POLL_INTERVAL_MINUTES = 5
 # Players beyond this cutoff are not shown.
 # Set to 0 or None to show all eligible players.
 # Posts are automatically split into threaded replies to fit Bluesky's character limit.
-STANDINGS_SPOTS = 10
+STANDINGS_SPOTS = 0
 
 # ── Ranking method for period standings ────────────────────────────────────────
 # Controls how players are ranked in weekly, monthly, and yearly standings.
@@ -60,11 +60,29 @@ STANDINGS_SPOTS = 10
 # "weighted" Inverted points (first guess = max points) multiplied by
 #            participation rate. Blends skill and attendance smoothly.
 
-RANKING_METHOD      = "best_n"   # "total" | "avg" | "adjusted" | "best_n" | "weighted"
+RANKING_METHOD      = "adjusted"   # "total" | "avg" | "adjusted" | "best_n" | "weighted"
 MIN_DAYS_THRESHOLD  = 3          # Minimum days to be eligible (used by "avg" only)
 BEST_OF_N_DAYS      = 5          # Best N days counted (used by "best_n"; 0 = all days)
 
+# Each period can have its own ranking method, or inherit the default.
+# Set to None to use the default RANKING_METHOD for that period.
+#
+# Recommended:
+#   weekly  → "best_n"    (best 5 of 7 — forgives a bad day)
+#   monthly → "adjusted"  (unplayed = DNF — rewards consistency over a month)
+#   yearly  → "adjusted"  (same logic, longer horizon)
+#   custom  → "total"     (simple and transparent for ad-hoc queries)
+
+WEEKLY_RANKING_METHOD   = "best_n"    # Weekly standings ranking (None = use RANKING_METHOD)
+MONTHLY_RANKING_METHOD  = "adjusted"  # Monthly standings ranking
+YEARLY_RANKING_METHOD   = "adjusted"  # Yearly standings ranking
+CUSTOM_RANKING_METHOD   = "total"     # Ad-hoc custom standings ranking
+
 # ── Storage ───────────────────────────────────────────────────────────────────
+# Pin the leaderboard post to the bot's profile after posting
+# Each new leaderboard replaces the previous pin
+PIN_LEADERBOARD = True
+
 # Handle to DM when a leaderboard post goes out (set to "" to disable)
 NOTIFY_HANDLE = ""
 
@@ -77,6 +95,7 @@ ACES_FILE     = "aces.json"           # All-time ace counts per player
 STREAKS_FILE  = "streaks.json"        # Consecutive daily play streaks
 OPTOUTS_FILE       = "optouts.json"        # Handles that have DM'd STOP
 KNOWN_PLAYERS_FILE = "known_players.json"  # Players already added to the Routlers list
+DNF_COUNTS_FILE    = "dnf_counts.json"       # All-time DNF counts per player
 
 # ── Reaction messages ──────────────────────────────────────────────────────────
 # Edit these freely — they're posted as replies to players' score posts.
@@ -122,9 +141,40 @@ ACE_MESSAGES = [
     "🚌 The driver didn't even announce the stop and {display_name} already knew. First guess ace. They're built different.\n\n {aces_line}",
     "🌃 {display_name} knows this city after dark, in the rain, on a Tuesday. First guess. No hesitation. This is their Portland.\n\n {aces_line}",
     "🎖️ {display_name} — FIRST GUESS ACE. We're not saying they're a TriMet legend, but we're also not NOT saying that.\n\n {aces_line}",
+    "🎲 NATURAL 20. {display_name} rolled a critical hit on the very first guess. The Dungeon Master nods. The table erupts. {aces_line}",
+    "⚔️ {display_name} — first guess, no hesitation. A paladin at full hit points, riding into the route with divine certainty. {aces_line}",
+    "🧙 {display_name} cast *Identify* on the route and instantly knew its name and properties. First guess. Legendary spell slot well spent. {aces_line}",
+    "🐉 The bard rolled Persuasion at advantage, got a 28, and the route just told {display_name} the answer. First guess. Bards, man. {aces_line}",
+    "🗺️ {display_name} consulted the tavern map, rolled Perception — nat 20 — and identified the route before anyone else had even drawn their character sheet. {aces_line}",
+    "🌅 {display_name} — first guess ace. The sun rose, the puzzle opened, and the answer was already known. Some people are simply awake before the rest of us. {aces_line}",
+    "🎺 FANFARE FOR {display_name}. First guess. The herald is already composing the proclamation. {aces_line}",
+    "🧲 {display_name} was drawn to the correct answer like a compass to true north. First guess. Magnetic. {aces_line}",
+    "🪄 {display_name} tapped the puzzle once, said the word, and it was done. First guess. We don't ask how. {aces_line}",
+    "🦁 THE LION DOES NOT DELIBERATE. {display_name}: first guess, zero hesitation, total dominance. {aces_line}",
+    "🌸 {display_name} arrived, glanced at the route, nodded once, and typed. First guess. Understated greatness. {aces_line}",
+    "⚡ Faster than light. Faster than thought. {display_name} answered before the question had fully formed. Guess one. {aces_line}",
+    "🎓 {display_name} has studied the routes. Not casually — *studied* them. First guess is the degree. {aces_line}",
+    "🌊 The tide knows where it's going. {display_name} knew where the route was going. First guess. Inevitable. {aces_line}",
+    "🔭 {display_name} has the long view. Saw the route from a mile away. First guess. The telescope was already pointed. {aces_line}",
+    "🎯 No wind. No noise. Just {display_name} and the answer, and the sound of a first guess landing perfectly. {aces_line}",
+    "🦋 {display_name} landed on the answer before the question even finished opening its wings. First guess. Effortless transformation. {aces_line}",
+    "🍀 Is it luck? Is it skill? With {display_name} on guess one, does it matter? The answer is correct. That's all we know. {aces_line}",
+    "🌙 Other people sleep. {display_name} dreams of routes and wakes up knowing the answer. First guess. {aces_line}",
+    "📐 {display_name} calculated the exact angle of approach and executed. First guess. Geometry has never been so satisfying. {aces_line}",
+    "🐬 {display_name} echolocated the route from a kilometre away. First guess. We don't fully understand it but we respect it. {aces_line}",
+    "🎪 Ladies and gentlemen: {display_name}. First guess. No net. No rehearsal. The crowd did not expect this but the crowd is pleased. {aces_line}",
+    "🧊 Cool as ice. {display_name} looked at the route, looked at the answer, didn't blink. First guess. Unrattled. Unbothered. Correct. {aces_line}",
+    "🌺 {display_name} — first guess. Some people bloom slowly. {display_name} arrived already in full flower. {aces_line}",
+    "🏹 The arrow left the bow before the target had stopped moving. First guess. {display_name} shoots first and is correct. {aces_line}",
+    "🎰 {display_name} walked up to the machine, put in one coin, and hit the jackpot. First guess. The odds were irrelevant. {aces_line}",
+    "☀️ {display_name} — first guess ace. The sun does not wonder whether to rise. It rises. {display_name} does not wonder. They answer. {aces_line}",
+    "🪸 {display_name} found the route the way coral finds the reef — like it was always there, like there was never any question. First guess. {aces_line}",
+    "🔑 {display_name} had the key before the lock was even mentioned. First guess. The door: open. The route: identified. {aces_line}",
+    "🌟 First guess. Not second. Not third. *First.* {display_name} is doing something the rest of us are only beginning to understand. {aces_line}",
 ]
 
 ACE_COUNT_LINES = [
+    # ── Portland ───────────────────────────────────────────────────────────────
     "That's ace #{aces} for them — somebody call Powell's, this needs to be a book.",
     "All-time ace #{aces}! The leaderboard historians are shook.",
     "Ace #{aces} on record! Buying everyone at the Alibi a round.",
@@ -132,6 +182,39 @@ ACE_COUNT_LINES = [
     "Ace number {aces}! Someone page the Zoobombers.",
     "#{aces} aces total and still going. This is their city.",
     "Career ace #{aces}! See you at the top of the leaderboard and also Pittock Mansion.",
+    "Ace #{aces}. The herons at Oaks Bottom have been notified.",
+    "#{aces} first-guess aces. A plaque is being commissioned for the Hollywood MAX platform.",
+    "Ace #{aces} logged. The TriMet archivist is updating the permanent record.",
+    "That's #{aces} aces. Word has reached the top of the Fremont Bridge.",
+    # ── Literary / classical ───────────────────────────────────────────────────
+    "Ace #{aces}. 'What a piece of work is a man' — Shakespeare didn't know about Routle, but he would have.",
+    "#{aces} aces. Homer could have written an epic about this. Several, actually.",
+    "Ace the {aces}th! As Tolkien wrote: 'Even the smallest person can change the course of the future.' This is not small.",
+    "#{aces} aces on the board. Dante had nine circles. This person has {aces} aces. Different kind of journey.",
+    "Ace #{aces}. Chekhov said if a route appears in act one, it must be identified by act one. Done.",
+    "That's {aces} aces. Somewhere, a poet is drafting an ode. It will not be published but it will be heartfelt.",
+    # ── RPG / gaming ──────────────────────────────────────────────────────────
+    "Ace #{aces}! Achievement unlocked: *Transit Oracle*.",
+    "#{aces} aces. Experience points awarded. The skill tree is fully lit.",
+    "Ace number {aces}. New title unlocked: *Grand Master of the First Guess*.",
+    "#{aces} aces — that's a legendary drop rate. The RNG favours the prepared.",
+    # ── Cinematic / dramatic ───────────────────────────────────────────────────
+    "Ace #{aces}. The crowd goes absolutely feral.",
+    "#{aces} aces and the montage keeps getting longer.",
+    "Ace {aces}. Cut to: the scoreboard. Freeze frame. Credits roll.",
+    "That's ace #{aces}. The sequel writes itself.",
+    # ── Understated / dry ─────────────────────────────────────────────────────
+    "Ace #{aces}. Noted.",
+    "#{aces}. Just #{aces}.",
+    "Ace number {aces}. Business as usual, apparently.",
+    "#{aces} aces. We've stopped being surprised. We remain impressed.",
+    "Ace #{aces}. The bar was high. The bar has been cleared. The bar is now higher.",
+    # ── Wild ──────────────────────────────────────────────────────────────────
+    "ACE #{aces}!! Scientists are studying this person. The data is unprecedented.",
+    "#{aces} aces. A small animal somewhere just looked up, sensed something, and went back to sleep.",
+    "Ace {aces}. The number {aces}. Let that sink in. Take your time. {aces}.",
+    "#{aces} ACES. The leaderboard is not a leaderboard anymore. It is a shrine.",
+    "Ace #{aces}. We asked a psychic. They said: 'yes, this was always going to happen.' They also said to drink more water.",
 ]
 
 DNF_MESSAGES = [
@@ -196,5 +279,52 @@ SCORE_MESSAGES = {
         "🌉 {display_name} made it on guess five. Like a Pedalpalooza ride that takes a very scenic detour — chaotic, slightly confusing, ultimately triumphant.",
         "🎭 {display_name} — guess five. The curtain was coming down at the Schnitz and you shouted the answer from the back row. It counts!",
         "🍩 {display_name} got it on the last guess! Original Hotcake & Steak House line at 2am energy — questionable journey, correct destination.",
+    ],
+}
+
+# ── Milestone messages ────────────────────────────────────────────────────────
+# Fired as a separate reply when a player hits a milestone.
+# Placeholders: {display_name}, {handle}, {count}
+#
+# ace   → fires at aces 5, 10, 25, 50, 100, 200, 500 (and every 100 after)
+# games → fires at games played 3, 7, 25, 50, 100, 200, 300, 365
+# dnf   → fires every 5 DNFs
+
+MILESTONE_MESSAGES = {
+    "ace": [
+        "🏅 {display_name} — {count} first-guess aces. This is not a hobby. This is a calling.",
+        "⭐ {count} aces for {display_name}. The hall of fame committee has convened. The vote was unanimous.",
+        "🏆 {count} aces! {display_name} is not playing the same game as the rest of us anymore.",
+        "🎖️ {display_name} has {count} all-time aces. There should be a statue. We are looking into it.",
+        "🌟 {count} first-guess aces for {display_name}. Future generations will study this.",
+        "🗺️ {count} aces. {display_name} doesn't consult the map. The map consults {display_name}.",
+        "🚌 {count} aces! TriMet has quietly begun rerouting buses in {display_name}'s honour.",
+        "🎲 {count} aces. That's not luck. That's not skill. That's something we don't have a word for yet.",
+        "📜 Let it be recorded: {display_name}, {count} aces. The scribe's hand trembled slightly while writing this.",
+        "🔑 {count} aces for {display_name}. At this point they probably *wrote* some of these routes.",
+    ],
+    "games": [
+        "🎮 {display_name} has played {count} games of Routle. A pattern is forming. It's a beautiful pattern.",
+        "🚌 {count} games played! {display_name} has now guessed more routes than most people know exist.",
+        "📅 {display_name} — {count} games in. The commitment is noted. The commitment is admired.",
+        "🌱 {count} games for {display_name}. Something is growing here. Water it daily.",
+        "🏃 {display_name} has shown up {count} times. Showing up is half the battle. {display_name} is winning the battle.",
+        "🗓️ {count} games played by {display_name}. This is not a phase. This is a lifestyle.",
+        "⭐ {display_name}: {count} games. The regulars know your name. The bus knows your stop.",
+        "🌳 {count} games for {display_name}. The roots go deep. This city is in their bones.",
+        "📊 {display_name} has {count} games logged. The analysts are compiling a report. The report is glowing.",
+        "🚦 {count} games for {display_name}. {count} days of showing up. That means something.",
+    ],
+    "dnf": [
+        "💪 {display_name} — {count} DNFs and still here. That's not failure. That's devotion.",
+        "🌧️ {count} DNFs for {display_name}. The rain falls on everyone. {display_name} keeps coming back.",
+        "🔥 {display_name} has DNF'd {count} times and returned every single time. This is the human spirit in action.",
+        "🚲 {count} DNFs. {display_name} has fallen off the bike {count} times and gotten back on {count} times. Hero.",
+        "🌊 {count} DNFs for {display_name}. The sea does not apologise. Neither does the route. Neither does {display_name}.",
+        "📖 The story of {display_name}: {count} chapters of not quite getting it, and {count} chapters of coming back anyway. Still being written.",
+        "🏔️ {count} DNFs. Every mountaineer has mornings the summit won. {display_name} keeps lacing up the boots.",
+        "⚡ {display_name}: {count} DNFs. {count} times the route won the day. {count} times {display_name} came back for more. The score is {count}-{count}. Nobody's quitting.",
+        "🌱 {count} DNFs for {display_name}. Some things grow slowly. The important ones usually do.",
+        "🎯 {count} misses logged for {display_name}. Every great archer has a pile of arrows that didn't land. The next one might.",
     ],
 }

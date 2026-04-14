@@ -11,6 +11,8 @@ e.g.              https://bsky.app/profile/rockom.bsky.social/feed/routle
 import re
 import json
 import os
+import time
+import random
 import datetime
 import requests
 from collections import defaultdict
@@ -20,10 +22,13 @@ from config import (
     GAME_NAME, GAME_DOMAIN,
     MAX_SQUARES, LEADERBOARD_TIME,
     WEEKLY_LEADERBOARD_DAY,
-    SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE,
+    SCORES_FILE, ACES_FILE, STREAKS_FILE, OPTOUTS_FILE, DNF_COUNTS_FILE,
     ROUTLERS_LIST_URI, KNOWN_PLAYERS_FILE,
+    PIN_LEADERBOARD,
     STANDINGS_SPOTS,
     RANKING_METHOD, MIN_DAYS_THRESHOLD, BEST_OF_N_DAYS,
+    WEEKLY_RANKING_METHOD, MONTHLY_RANKING_METHOD,
+    YEARLY_RANKING_METHOD, CUSTOM_RANKING_METHOD,
 )
 
 # ─── Bluesky API helpers ───────────────────────────────────────────────────────
@@ -35,6 +40,7 @@ def login(handle: str, password: str) -> dict:
     resp = requests.post(
         f"{BASE_URL}/com.atproto.server.createSession",
         json={"identifier": handle, "password": password},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -45,6 +51,7 @@ def resolve_did(handle: str, token: str) -> str:
         f"{BASE_URL}/com.atproto.identity.resolveHandle",
         params={"handle": handle},
         headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()["did"]
@@ -66,6 +73,7 @@ def get_custom_feed(feed_uri: str, token: str, limit: int = 100) -> list:
             f"{BASE_URL}/app.bsky.feed.getFeed",
             params=params,
             headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -76,10 +84,14 @@ def get_custom_feed(feed_uri: str, token: str, limit: int = 100) -> list:
     return posts[:limit]
 
 
-def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
+def post_text(text: str, session: dict,
+              reply_to: dict | None = None,
+              root_ref: dict | None = None) -> dict:
     """
-    Create a post. If reply_to is provided, post as a reply.
-    reply_to should be {"uri": "at://...", "cid": "..."} from the parent post.
+    Create a post.
+    reply_to : the immediate parent post {"uri": ..., "cid": ...}
+    root_ref : the thread root post (defaults to reply_to for direct replies,
+               must be set explicitly for deeper thread replies)
     """
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     record = {
@@ -89,8 +101,9 @@ def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
         "langs": ["en-US"],
     }
     if reply_to:
-        ref = {"uri": reply_to["uri"], "cid": reply_to["cid"]}
-        record["reply"] = {"root": ref, "parent": ref}
+        parent = {"uri": reply_to["uri"], "cid": reply_to["cid"]}
+        root   = {"uri": root_ref["uri"], "cid": root_ref["cid"]} if root_ref else parent
+        record["reply"] = {"root": root, "parent": parent}
     resp = requests.post(
         f"{BASE_URL}/com.atproto.repo.createRecord",
         json={
@@ -99,6 +112,7 @@ def post_text(text: str, session: dict, reply_to: dict | None = None) -> dict:
             "record": record,
         },
         headers={"Authorization": f"Bearer {session['accessJwt']}"},
+        timeout=10,
     )
     resp.raise_for_status()
     return resp.json()
@@ -167,8 +181,10 @@ def load_known_players() -> dict:
 
 
 def save_known_players(known: dict):
-    with open(KNOWN_PLAYERS_FILE, "w") as f:
+    _tmp = KNOWN_PLAYERS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(known, f, indent=2, sort_keys=True)
+    os.replace(_tmp, KNOWN_PLAYERS_FILE)
 
 
 def maybe_add_to_routlers(session: dict, handle: str, did: str,
@@ -203,10 +219,12 @@ def maybe_add_to_routlers(session: dict, handle: str, did: str,
 #   04/08/2026
 #   🟩 ⬛ ⬛ ⬛ ⬛
 #   www.routle.city/trimet
+# Tolerant match: allows extra spaces, \r\n line endings, and minor formatting
+# variations between the game name, date, and emoji grid lines.
 RESULT_RE = re.compile(
-    rf"{re.escape(GAME_NAME)}[^\n]*\n"
-    r"(\d{2}/\d{2}/\d{4})\n"
-    r"([\U0001F7E9\u2B1B\U0001F7E8\U0001F7E5\U0001F7EA\s]+)",
+    rf"{re.escape(GAME_NAME)}[^\n]*\r?\n"
+    r"[ \t]*(\d{2}/\d{2}/\d{4})[ \t]*\r?\n"
+    r"([ \t\U0001F7E9\u2B1B\U0001F7E8\U0001F7E5\U0001F7EA]+)",
     re.IGNORECASE,
 )
 
@@ -268,8 +286,10 @@ def load_scores() -> dict:
 
 
 def save_scores(scores: dict):
-    with open(SCORES_FILE, "w") as f:
+    _tmp = SCORES_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(scores, f, indent=2, sort_keys=True)
+    os.replace(_tmp, SCORES_FILE)
 
 
 # ─── Score aggregation ─────────────────────────────────────────────────────────
@@ -298,10 +318,10 @@ def scores_for_period(scores: dict, date_keys: list[str]) -> dict:
     return dict(agg)
 
 
-def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
+def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) -> dict:
     """
-    Apply the configured RANKING_METHOD to enrich each player's agg entry
-    with a sort key and display stats. Returns enriched agg dict.
+    Apply ranking to enrich each player's agg entry with sort key and display stats.
+    method overrides RANKING_METHOD when provided (used for per-period config).
 
     Methods:
       "total"    — raw total guesses (current behaviour, lower = better)
@@ -311,12 +331,13 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
       "weighted" — inverted points × participation rate
     """
     total_days = len(date_keys)
+    effective_method = method or RANKING_METHOD
 
     for handle, s in agg.items():
         days     = s["days"]
         daily    = sorted(s["daily_scores"])          # ascending = best first
 
-        if RANKING_METHOD == "avg":
+        if effective_method == "avg":
             # Exclude players below minimum threshold
             if MIN_DAYS_THRESHOLD and days < MIN_DAYS_THRESHOLD:
                 s["rank_key"]   = (999, 0)            # sorts to bottom
@@ -327,7 +348,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
                 s["rank_stat"]  = f"⌀{s['avg']:.2f}"
                 s["eligible"]   = True
 
-        elif RANKING_METHOD == "adjusted":
+        elif effective_method == "adjusted":
             # Treat unplayed days as DNF (MAX_SQUARES+1)
             missing = total_days - days
             adj_total = s["total"] + missing * DNF
@@ -336,7 +357,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"⌀{adj_avg:.2f}"
             s["eligible"]  = True
 
-        elif RANKING_METHOD == "best_n":
+        elif effective_method == "best_n":
             n = BEST_OF_N_DAYS or total_days
             best_scores = daily[:n]                   # n lowest (best) scores
             avg = round(sum(best_scores) / len(best_scores), 4) if best_scores else 0
@@ -344,7 +365,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"⌀{avg:.2f} (b{len(best_scores)})"
             s["eligible"]  = True
 
-        elif RANKING_METHOD == "weighted":
+        elif effective_method == "weighted":
             # Points = sum(MAX_SQUARES+1 - score) for each day played; DNF = 0 pts
             pts = sum(max(0, DNF - sc) for sc in s["daily_scores"])
             rate = days / total_days if total_days else 0
@@ -353,7 +374,7 @@ def rank_period_agg(agg: dict, date_keys: list[str]) -> dict:
             s["rank_stat"] = f"{pts}pts×{rate:.0%}"
             s["eligible"]  = True
 
-        else:  # "total" (default)
+        else:  # "total" (default) or unrecognised
             s["rank_key"]  = (s["total"], s["dnf"], s["avg"])
             s["rank_stat"] = None                     # use default display
             s["eligible"]  = True
@@ -462,7 +483,7 @@ def format_daily_leaderboard(date_str: str, day_scores: dict) -> str:
     return header + footer  # extreme fallback
 
 
-def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: list[str]) -> list[str]:
+def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: list[str], method: str | None = None) -> list[str]:
     """
     Format a period standings post, split into pages of STANDINGS_PAGE_SIZE players.
     Returns a list of strings — first is the main post, rest are continuation replies.
@@ -471,7 +492,7 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
         return [f"No {GAME_NAME} results for {title} yet!"]
 
     # Enrich agg with ranking keys for the configured method
-    agg = rank_period_agg(agg, date_keys)
+    agg = rank_period_agg(agg, date_keys, method=method)
 
     # Sort: eligible players first by rank_key, ineligible at bottom
     all_ranked = sorted(
@@ -495,6 +516,7 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     total_days  = len(date_keys)
     n_shown     = len([r for r in ranked if r[1].get("eligible", True)])
     shown_note  = f" (top {n_shown} of {total_players})" if total_players > n_shown else ""
+    _eff = agg[next(iter(agg))].get("_method", RANKING_METHOD) if agg else RANKING_METHOD
     method_note = {
         "avg":      f" · min {MIN_DAYS_THRESHOLD}d to qualify",
         "adjusted": " · unplayed=DNF",
@@ -585,19 +607,19 @@ def format_weekly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     monday = ref - datetime.timedelta(days=ref.weekday())
     sunday = monday + datetime.timedelta(days=6)
     label = f"Weekly Standings — {monday.strftime('%b %-d')}–{sunday.strftime('%-d, %Y')}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=WEEKLY_RANKING_METHOD)
 
 
 def format_monthly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     keys = date_keys_for_month(ref)
     label = f"Monthly Standings — {ref.strftime('%B %Y')}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=MONTHLY_RANKING_METHOD)
 
 
 def format_yearly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     keys = date_keys_for_year(ref)
     label = f"Yearly Standings — {ref.year}"
-    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys)
+    return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=YEARLY_RANKING_METHOD)
 
 
 # ─── Ace tracking ─────────────────────────────────────────────────────────────
@@ -611,8 +633,10 @@ def load_aces() -> dict:
 
 
 def save_aces(aces: dict):
-    with open(ACES_FILE, "w") as f:
+    _tmp = ACES_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(aces, f, indent=2, sort_keys=True)
+    os.replace(_tmp, ACES_FILE)
 
 
 # ─── Streak tracking ──────────────────────────────────────────────────────────
@@ -626,8 +650,10 @@ def load_streaks() -> dict:
 
 
 def save_streaks(streaks: dict):
-    with open(STREAKS_FILE, "w") as f:
+    _tmp = STREAKS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(streaks, f, indent=2, sort_keys=True)
+    os.replace(_tmp, STREAKS_FILE)
 
 
 def update_streak(streaks: dict, handle: str, date_str: str) -> tuple[int, int, bool]:
@@ -675,8 +701,10 @@ def load_optouts() -> set:
 
 
 def save_optouts(optouts: set):
-    with open(OPTOUTS_FILE, "w") as f:
+    _tmp = OPTOUTS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
         json.dump(sorted(optouts), f, indent=2)
+    os.replace(_tmp, OPTOUTS_FILE)
 
 
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
@@ -805,9 +833,69 @@ def record_ace(aces: dict, handle: str) -> int:
     return aces[handle]
 
 
-# ─── Reaction messages ─────────────────────────────────────────────────────────
+# ─── DNF count tracking ───────────────────────────────────────────────────────
 
-import random
+def load_dnf_counts() -> dict:
+    """Load DNF counts. Structure: {"handle": int}"""
+    if os.path.exists(DNF_COUNTS_FILE):
+        with open(DNF_COUNTS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_dnf_counts(dnf_counts: dict):
+    _tmp = DNF_COUNTS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(dnf_counts, f, indent=2, sort_keys=True)
+    os.replace(_tmp, DNF_COUNTS_FILE)
+
+
+def record_dnf(dnf_counts: dict, handle: str) -> int:
+    """Increment DNF count for handle, return new total."""
+    dnf_counts[handle] = dnf_counts.get(handle, 0) + 1
+    return dnf_counts[handle]
+
+
+def games_played_count(scores: dict, handle: str) -> int:
+    """Count total games played by handle across all dates in scores.json."""
+    return sum(1 for day in scores.values() if handle in day)
+
+
+# ─── Milestone detection ───────────────────────────────────────────────────────
+
+ACE_MILESTONES    = {5, 10, 25, 50, 100, 200, 500}
+GAMES_MILESTONES  = {3, 7, 25, 50, 100, 200, 300, 365}
+DNF_MILESTONE_EVERY = 5   # fire every N DNFs
+
+
+def is_ace_milestone(count: int) -> bool:
+    return count in ACE_MILESTONES or (count >= 100 and count % 100 == 0)
+
+
+def is_games_milestone(count: int) -> bool:
+    return count in GAMES_MILESTONES
+
+
+def is_dnf_milestone(count: int) -> bool:
+    return count > 0 and count % DNF_MILESTONE_EVERY == 0
+
+
+def make_milestone_post(handle: str, display_name: str,
+                        kind: str, count: int) -> str:
+    """
+    Build a milestone message. kind is "ace", "games", or "dnf".
+    Falls back gracefully if no messages configured.
+    """
+    from config import MILESTONE_MESSAGES
+    pool = MILESTONE_MESSAGES.get(kind, [])
+    if not pool:
+        return ""
+    return random.choice(pool).format(
+        display_name=display_name, handle=handle, count=count
+    )
+
+
+# ─── Reaction messages ─────────────────────────────────────────────────────────
 
 # Messages are defined in config.py — edit them there.
 # Templates support: {handle}, {aces_line} (ace messages) or {handle} (DNF messages).
@@ -821,13 +909,13 @@ def _ace_count_line(aces: int) -> str:
 def _streak_suffix(current_streak: int, is_new_best: bool) -> str:
     """Return a streak note to append to reactions, or empty string."""
     if current_streak >= 2 and is_new_best:
-        return f" 🔥 New best streak: {current_streak} days in a row!"
+        return f"\n\n🔥 New best streak: {current_streak} days in a row!"
     if current_streak >= 7:
-        return f" 🔥 {current_streak}-day streak!!"
+        return f"\n\n🔥 {current_streak}-day streak!!"
     if current_streak >= 3:
-        return f" 🔥 {current_streak} days in a row!"
+        return f"\n\n🔥 {current_streak} days in a row!"
     if current_streak == 2:
-        return " 🔥 2 days running!"
+        return "\n\n🔥 2 days running!"
     return ""
 
 
@@ -870,6 +958,7 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
     print(f"  Retrieved {len(feed)} post(s).")
 
     aces = load_aces()
+    dnf_counts = load_dnf_counts()
     streaks = load_streaks()
     optouts = load_optouts()
     known = load_known_players()
@@ -908,16 +997,34 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                 print(f"  (skipping reaction — @{author} opted out)")
                 continue
 
+            # Games played milestone check (applies to all scores)
+            total_games = games_played_count(scores, author)
+            if is_games_milestone(total_games):
+                milestone_msg = make_milestone_post(author, display_name, "games", total_games)
+                if milestone_msg:
+                    _post_and_print(f"Games milestone ({total_games}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
+
             if score == 1:
                 # Ace! Update count and post congratulations as a reply
                 ace_count = record_ace(aces, author)
                 reaction = make_ace_post(author, display_name, ace_count, current_streak, is_new_best)
                 _post_and_print(f"Ace reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
+                # Ace milestone check
+                if is_ace_milestone(ace_count):
+                    milestone_msg = make_milestone_post(author, display_name, "ace", ace_count)
+                    if milestone_msg:
+                        _post_and_print(f"Ace milestone ({ace_count}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif score == DNF:
                 # Missed every stop — commiserate as a reply
+                dnf_count = record_dnf(dnf_counts, author)
                 reaction = make_dnf_post(author, display_name)
                 _post_and_print(f"DNF reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
+                # DNF milestone check
+                if is_dnf_milestone(dnf_count):
+                    milestone_msg = make_milestone_post(author, display_name, "dnf", dnf_count)
+                    if milestone_msg:
+                        _post_and_print(f"DNF milestone ({dnf_count}) for @{author}", milestone_msg, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             elif 2 <= score <= MAX_SQUARES:
                 # Score-specific reaction for guesses 2–5
@@ -926,32 +1033,120 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                     _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
     save_aces(aces)
+    save_dnf_counts(dnf_counts)
     save_streaks(streaks)
     save_known_players(known)
     print(f"  {new_entries} new result(s) recorded.")
     return new_entries
 
 
+# ─── Profile pin ──────────────────────────────────────────────────────────────
+
+def pin_post(session: dict, post_uri: str, post_cid: str) -> bool:
+    """
+    Pin a post to the bot's Bluesky profile by updating the actor profile record.
+    Returns True on success.
+    """
+    token = session["accessJwt"]
+    did   = session["did"]
+
+    # Fetch the current profile record so we don't overwrite other fields
+    try:
+        resp = requests.get(
+            f"{BASE_URL}/com.atproto.repo.getRecord",
+            params={"repo": did, "collection": "app.bsky.actor.profile", "rkey": "self"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp.raise_for_status()
+        current = resp.json().get("value", {})
+        swap_cid = resp.json().get("cid")          # needed for compare-and-swap
+    except Exception as e:
+        print(f"  ⚠ Could not fetch profile record: {e}")
+        return False
+
+    # Merge pinnedPost into the existing profile record
+    current["pinnedPost"] = {"uri": post_uri, "cid": post_cid}
+    current.setdefault("$type", "app.bsky.actor.profile")
+
+    try:
+        body = {
+            "repo": did,
+            "collection": "app.bsky.actor.profile",
+            "rkey": "self",
+            "record": current,
+        }
+        if swap_cid:
+            body["swapRecord"] = swap_cid          # atomic compare-and-swap
+
+        requests.post(
+            f"{BASE_URL}/com.atproto.repo.putRecord",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        ).raise_for_status()
+        return True
+    except Exception as e:
+        print(f"  ⚠ Could not pin post: {e}")
+        return False
+
+
 # ─── Posting helpers ───────────────────────────────────────────────────────────
 
-OPTOUT_TAG = "\n\nDM 'stop' to discontinue replies"
+OPTOUT_TAG   = "\n\nDM 'stop' to discontinue replies"
+MAX_RETRIES  = 3     # attempts before giving up on a single post
+RETRY_DELAY  = 3.0   # seconds between retry attempts
+
+
+def _post_with_retry(text: str, session: dict,
+                     reply_to: dict | None = None,
+                     root_ref: dict | None = None) -> dict | None:
+    """
+    Call post_text with up to MAX_RETRIES attempts on transient errors.
+    Returns the result dict on success, None if all attempts fail.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return post_text(text, session, reply_to=reply_to, root_ref=root_ref)
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                print(f"  ⚠ Post attempt {attempt}/{MAX_RETRIES} failed: {e} — retrying in {RETRY_DELAY}s")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"  ❌ Post failed after {MAX_RETRIES} attempts: {e}")
+    return None
 
 
 def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
                     reply_to: dict | None = None,
-                    is_reaction: bool = False) -> dict | None:
-    """Post text and print to log. Returns {"uri": ..., "cid": ...} on success, else None."""
+                    root_ref: dict | None = None,
+                    is_reaction: bool = False,
+                    pin: bool = True) -> dict | None:
+    """
+    Post text, confirm it is indexed in the AppView, and return the ref.
+    Returns {"uri": ..., "cid": ...} on success, None on failure or dry_run.
+    """
     # Append opt-out instructions only to player reaction replies,
     # NOT to standings continuation posts which also use reply_to.
     if reply_to and is_reaction:
         text = text + OPTOUT_TAG
     print(f"\n── {label} ──\n{text}\n" + "─" * 40)
     if not dry_run:
-        result = post_text(text, session, reply_to=reply_to)
+        result = _post_with_retry(text, session, reply_to=reply_to, root_ref=root_ref)
+        if not result:
+            return None
         uri = result.get("uri", "")
         cid = result.get("cid", "")
         print(f"✅ Posted! URI: {uri}")
-        # DM the notify handle when a top-level leaderboard post goes out
+
+        # Read-confirm: verify the post is visible in the AppView before returning.
+        # This is critical for threading — the next reply must be able to find its parent.
+        if uri:
+            confirmed = _await_indexed(uri, session["accessJwt"])
+            if confirmed:
+                print(f"  ✓ Confirmed indexed")
+            else:
+                print(f"  ⚠ Could not confirm indexing (timed out) — thread may break")
+
+        # For top-level leaderboard posts (not reactions or continuations)
         if not reply_to:
             from config import NOTIFY_HANDLE
             if NOTIFY_HANDLE:
@@ -962,27 +1157,66 @@ def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
                     dm_text += f"\n{post_url}"
                 send_dm(session, NOTIFY_HANDLE, dm_text)
                 print(f"  📨 Notified @{NOTIFY_HANDLE}")
+            # Pin post to bot profile if configured and allowed
+            if pin and PIN_LEADERBOARD and uri and cid:
+                if pin_post(session, uri, cid):
+                    print(f"  📌 Pinned to profile")
+                # (failure already logged inside pin_post)
         return {"uri": uri, "cid": cid}
     else:
         print("  (dry run — not posted)")
         return None
 
 
-def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool):
+def _await_indexed(uri: str, token: str, timeout: int = 30, interval: float = 2.0) -> bool:
+    """
+    Poll app.bsky.feed.getPosts until the post appears in the AppView or timeout.
+    Returns True if found, False if timed out.
+    """
+    deadline = time.time() + timeout
+    headers = {"Authorization": f"Bearer {token}"}
+    while time.time() < deadline:
+        try:
+            resp = requests.get(
+                f"{BASE_URL}/app.bsky.feed.getPosts",
+                params={"uris": uri},
+                headers=headers,
+                timeout=5,
+            )
+            if resp.ok and resp.json().get("posts"):
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, pin: bool = True):
     """
     Post a period standings. First page is a top-level post;
     subsequent pages are threaded as replies, each replying to the previous.
+    pin: whether to pin the first page to the bot profile (False for ad-hoc posts).
+    After each post we poll the AppView until it confirms the post is indexed
+    before posting the next reply — this prevents broken thread chains.
     """
     if not pages:
         return
-    result = _post_and_print(label, pages[0], session, dry_run)
+    # Post page 1 — this becomes the thread root
+    root_result = _post_and_print(label, pages[0], session, dry_run, pin=pin)
     if len(pages) == 1:
         return
-    # Thread continuation pages as replies to the previous post
-    prev_ref = result  # {"uri": ..., "cid": ...} or None in dry_run
+
+    # root_ref stays fixed as page 1 for the whole thread.
+    # prev_ref advances to each new post so parent chains correctly.
+    root_ref = root_result
+    prev_ref = root_result
+
     for i, page in enumerate(pages[1:], 2):
         cont_label = f"{label} cont. ({i}/{len(pages)})"
-        prev_ref = _post_and_print(cont_label, page, session, dry_run, reply_to=prev_ref)
+        prev_ref = _post_and_print(
+            cont_label, page, session, dry_run,
+            reply_to=prev_ref, root_ref=root_ref,
+        )
 
 
 # ─── Public run functions (used by scheduler + CLI) ────────────────────────────
@@ -1142,7 +1376,7 @@ def run_standings(
         date_keys = [(start + datetime.timedelta(days=i)).isoformat() for i in range(delta)]
         label = f"Standings — {start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
         agg = scores_for_period(scores, date_keys)
-        pages = format_period_leaderboard(label, agg, scores, date_keys)
+        pages = format_period_leaderboard(label, agg, scores, date_keys, method=CUSTOM_RANKING_METHOD)
     elif period == "weekly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_weekly_leaderboard(ref, scores)
@@ -1156,7 +1390,7 @@ def run_standings(
         print(f"❌ Unknown period: {period}")
         return
 
-    _post_standings(period.capitalize(), pages, session, dry_run)
+    _post_standings(period.capitalize(), pages, session, dry_run, pin=False)
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────

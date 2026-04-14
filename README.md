@@ -1,15 +1,15 @@
-# 🚌 Routle Bot — v3
+# 🚌 Routle Bot — v4
 
-A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks and aces, manages a Routlers player list, and lets players opt out via DM.
+A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
 Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxroutl.bsky.social). Easily adaptable to any Routle city or similar game.
 
 ---
 
-## What it does
+## Features
 
 ### Daily leaderboard
-Posted every day at a configured time. Shows each player's emoji result grid, rank, and a score distribution histogram. Handles Bluesky's 300-character limit gracefully — long player lists are trimmed with an `…and N more` note.
+Posted every day at a configured time. Shows each player's emoji result grid, rank, and a score distribution histogram. Handles Bluesky's 300-character limit — long player lists trim with `…and N more`.
 
 ```
 🏆 Routle Daily — April 9, 2026
@@ -28,7 +28,7 @@ Posted every day at a configured time. Shows each player's emoji result grid, ra
 ```
 
 ### Period standings (weekly / monthly / yearly)
-Posted on a schedule as threaded replies. Uses short handles and aligned columns. Long standings split across multiple posts in a thread automatically.
+Posted on a schedule as correctly threaded reply chains. Uses short handles and aligned columns. Long standings split across multiple posts automatically. Uses configurable ranking methods per period.
 
 ```
 🏆 Routle Weekly Standings — Apr 7–13, 2026
@@ -43,25 +43,28 @@ Posted on a schedule as threaded replies. Uses short handles and aligned columns
 
 ### Reactions
 The bot replies to each player's score post with Portland-flavored commentary:
-
 - **Guess 1 (ace)** — celebratory message with all-time ace count
-- **Guesses 2–5** — score-appropriate commentary (close call, solid, long way round, barely made it)
+- **Guesses 2–5** — score-appropriate commentary
 - **DNF** — commiseration
-- **Streaks** — 🔥 suffix when a player hits 2+ consecutive days, new personal bests called out
+- **Streaks** — 🔥 suffix for consecutive days, new personal bests called out
 
-All messages are defined in `config.py` — edit freely, add more, no code changes needed.
+### Milestones
+Separate additional reply when a player hits:
+- **Ace milestones** — at 5, 10, 25, 50, 100, 200, 500
+- **Games played milestones** — at 3, 7, 25, 50, 100, 200, 300, 365
+- **DNF milestones** — every 5 DNFs (celebrating persistence)
 
 ### Opt-out via DM
-Players DM `stop` to the bot handle to stop receiving reply reactions. The bot confirms with a DM and stops replying. DM `start` to re-enable. Opted-out players still appear in all leaderboards and standings.
+Players DM `stop` to the bot handle to stop receiving reply reactions. DM `start` to re-enable. Opted-out players still appear in leaderboards and standings.
 
 ### Routlers list
-Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded. Run once to create the list, paste the URI into config, and the bot handles the rest.
+Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded.
 
-### Admin DM notification
-DMs a configurable handle whenever a leaderboard or standings post goes out, with a link to the post.
+### Reliable threaded posting
+Multi-page standings use correct Bluesky thread structure (`root` always points to page 1, `parent` to the immediately preceding post). Each post is confirmed as indexed in the AppView before the next reply is posted. Failed posts are retried up to 3 times.
 
 ### Feed polling
-Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence — daily, weekly (configurable day), monthly (1st of month, covers previous month), yearly (Jan 1, covers previous year).
+Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence.
 
 ---
 
@@ -156,7 +159,6 @@ help         Show help
 # Preview without posting
 ./run_bot.sh standings weekly --dry-run
 ./run_bot.sh standings monthly --dry-run
-./run_bot.sh standings yearly --dry-run
 
 # Post immediately
 ./run_bot.sh standings weekly
@@ -198,7 +200,11 @@ help         Show help
 | Setting | Default | Description |
 |---|---|---|
 | `STANDINGS_SPOTS` | `10` | Players shown per standings (0 or None = all) |
-| `RANKING_METHOD` | `best_n` | Ranking algorithm — see below |
+| `RANKING_METHOD` | `best_n` | Global default ranking algorithm |
+| `WEEKLY_RANKING_METHOD` | `best_n` | Weekly override (None = use global) |
+| `MONTHLY_RANKING_METHOD` | `adjusted` | Monthly override |
+| `YEARLY_RANKING_METHOD` | `adjusted` | Yearly override |
+| `CUSTOM_RANKING_METHOD` | `total` | Ad-hoc standings override |
 | `MIN_DAYS_THRESHOLD` | `3` | Min days to qualify (used by `avg` only) |
 | `BEST_OF_N_DAYS` | `5` | Best N days counted (used by `best_n`; 0 = all days) |
 
@@ -207,7 +213,7 @@ help         Show help
 | Method | How it works | Best for |
 |---|---|---|
 | `total` | Raw total guesses. Lower = better. | Simple transparency |
-| `avg` | Average guesses per day played. Players below `MIN_DAYS_THRESHOLD` are shown but unranked (—). | Skill-first with a fairness floor |
+| `avg` | Average guesses per day played. Players below `MIN_DAYS_THRESHOLD` shown but unranked. | Skill-first with a fairness floor |
 | `adjusted` | Average across all days. Unplayed days count as DNF. | Monthly/yearly — balances skill and consistency |
 | `best_n` | Average of best `BEST_OF_N_DAYS` scores. Off days and absences forgiven. | Weekly — "your best 5 of 7 count" |
 | `weighted` | Inverted points × participation rate. | Smooth skill + attendance blend |
@@ -216,37 +222,39 @@ help         Show help
 
 | Setting | Default | Description |
 |---|---|---|
-| `NOTIFY_HANDLE` | `""` | Handle to DM when a leaderboard posts (set `""` to disable) |
-| `ROUTLERS_LIST_URI` | `""` | AT-URI of the Routlers curated list (set `""` to disable) |
+| `NOTIFY_HANDLE` | `""` | Handle to DM when a leaderboard posts |
+| `PIN_LEADERBOARD` | `True` | Pin each leaderboard to the bot's profile |
+| `ROUTLERS_LIST_URI` | `""` | AT-URI of the Routlers curated list |
 | `SCORES_FILE` | `scores.json` | Daily scores |
 | `ACES_FILE` | `aces.json` | All-time ace counts |
 | `STREAKS_FILE` | `streaks.json` | Consecutive day streaks |
 | `OPTOUTS_FILE` | `optouts.json` | Opted-out handles |
-| `KNOWN_PLAYERS_FILE` | `known_players.json` | Players already added to Routlers list |
+| `KNOWN_PLAYERS_FILE` | `known_players.json` | Players added to Routlers list |
+| `DNF_COUNTS_FILE` | `dnf_counts.json` | All-time DNF counts |
 
 ---
 
 ## Customizing messages
 
-All reaction messages live at the bottom of `config.py`. Edit freely — the bot picks randomly from each list on every reaction. Add entries for variety, remove any you don't want. No code changes needed.
+All reaction and milestone messages live at the bottom of `config.py`. Edit freely — the bot picks randomly from each list. No code changes needed.
 
 | List | Fired when | Placeholders |
 |---|---|---|
 | `ACE_MESSAGES` | First-guess ace | `{display_name}`, `{handle}`, `{aces_line}` |
-| `ACE_COUNT_LINES` | Appended to ace messages | `{aces}` |
-| `DNF_MESSAGES` | All guesses wrong (all 🟥) | `{display_name}`, `{handle}` |
-| `SCORE_MESSAGES[2]` | Got it on guess 2 | `{display_name}`, `{handle}` |
-| `SCORE_MESSAGES[3]` | Got it on guess 3 | `{display_name}`, `{handle}` |
-| `SCORE_MESSAGES[4]` | Got it on guess 4 | `{display_name}`, `{handle}` |
-| `SCORE_MESSAGES[5]` | Got it on guess 5 | `{display_name}`, `{handle}` |
+| `ACE_COUNT_LINES` | Appended to every ace message | `{aces}` |
+| `DNF_MESSAGES` | All guesses wrong | `{display_name}`, `{handle}` |
+| `SCORE_MESSAGES[2–5]` | Got it on guess 2–5 | `{display_name}`, `{handle}` |
+| `MILESTONE_MESSAGES["ace"]` | Ace milestone hit | `{display_name}`, `{handle}`, `{count}` |
+| `MILESTONE_MESSAGES["games"]` | Games played milestone | `{display_name}`, `{handle}`, `{count}` |
+| `MILESTONE_MESSAGES["dnf"]` | DNF milestone (every 5) | `{display_name}`, `{handle}`, `{count}` |
 
-Streak suffixes are appended automatically when relevant — you don't need to add them to messages.
+Streak suffixes (🔥) are appended automatically — no need to add them to messages.
 
 ---
 
 ## Data files
 
-All files are created automatically on first run. Safe to edit manually to correct mistakes.
+All files created automatically on first run. Safe to edit manually.
 
 | File | Contents |
 |---|---|
@@ -255,6 +263,9 @@ All files are created automatically on first run. Safe to edit manually to corre
 | `streaks.json` | `{"handle": {"current": N, "best": N, "last_date": "YYYY-MM-DD"}}` |
 | `optouts.json` | `["handle", ...]` |
 | `known_players.json` | `{"handle": "did:plc:..."}` |
+| `dnf_counts.json` | `{"handle": total_dnf_count}` |
+
+All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 
 ---
 
@@ -277,6 +288,16 @@ WantedBy=multi-user.target
 
 ---
 
+## Reliability notes
+
+- **Retry logic** — each post is attempted up to 3 times before giving up
+- **Read-confirm** — after posting, the bot polls `app.bsky.feed.getPosts` until the post is confirmed visible in the AppView before continuing
+- **Correct threading** — multi-page standings use `root` (always page 1) and `parent` (immediately preceding post) as required by the AT Protocol
+- **Atomic writes** — all JSON data files use write-then-rename to prevent corruption
+- **Request timeouts** — all Bluesky API calls have a 10-second timeout
+
+---
+
 ## Adapting to another city
 
 ```python
@@ -294,12 +315,12 @@ Then update the message lists in `config.py` with your city's local references.
 
 ```
 routle-bot/
-├── routle_bot.py        # Core bot — scoring, reactions, leaderboards, DM handling
-├── run_scheduler.py     # Continuous scheduler — polls feed + fires leaderboards
+├── routle_bot.py        # Core bot
+├── run_scheduler.py     # Continuous scheduler
 ├── run_bot.sh           # Shell interface for all commands
 ├── config.example.py    # Template — copy to config.py and fill in
 ├── requirements.txt     # requests>=2.31.0
-├── .gitignore           # Excludes config.py, *.json data files, .venv, logs
+├── .gitignore
 ├── LICENSE              # MIT
 └── README.md
 ```
