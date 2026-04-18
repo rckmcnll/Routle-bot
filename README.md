@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v4
+# 🚌 Routle Bot — v5
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
@@ -57,6 +57,9 @@ Separate additional reply when a player hits:
 ### Opt-out via DM
 Players DM `stop` to the bot handle to stop receiving reply reactions. DM `start` to re-enable. Opted-out players still appear in leaderboards and standings.
 
+### Personal stats via DM
+Players DM `stats` to receive a personal stats card — games played, current and best streaks, aces, DNFs, average score, and a score distribution histogram. Works for all players regardless of opt-out status.
+
 ### Routlers list
 Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded.
 
@@ -97,8 +100,8 @@ Edit `config.py`. Required fields:
 ```python
 BOT_HANDLE          = "your-bot.bsky.social"
 BOT_PASSWORD        = "xxxx-xxxx-xxxx-xxxx"   # App Password with DM access
-FEED_CREATOR_HANDLE = "rockom.bsky.social"     # Owner of the Bluesky feed
-FEED_SLUG           = "routle"                 # Slug from the feed URL
+FEED_CREATOR_HANDLE = "feedowner.bsky.social"  # Owner of the Bluesky feed
+FEED_SLUG           = "your-feed-slug"         # Slug from the feed URL
 ```
 
 > **App Password:** Bluesky → Settings → Privacy and Security → App Passwords → Create new → **check "Allow access to your direct messages"**
@@ -199,8 +202,8 @@ help         Show help
 
 | Setting | Default | Description |
 |---|---|---|
-| `STANDINGS_SPOTS` | `10` | Players shown per standings (0 or None = all) |
-| `RANKING_METHOD` | `best_n` | Global default ranking algorithm |
+| `STANDINGS_SPOTS` | `0` | Players shown per standings (0 or None = all) |
+| `RANKING_METHOD` | `adjusted` | Global default ranking algorithm |
 | `WEEKLY_RANKING_METHOD` | `best_n` | Weekly override (None = use global) |
 | `MONTHLY_RANKING_METHOD` | `adjusted` | Monthly override |
 | `YEARLY_RANKING_METHOD` | `adjusted` | Yearly override |
@@ -231,6 +234,37 @@ help         Show help
 | `OPTOUTS_FILE` | `optouts.json` | Opted-out handles |
 | `KNOWN_PLAYERS_FILE` | `known_players.json` | Players added to Routlers list |
 | `DNF_COUNTS_FILE` | `dnf_counts.json` | All-time DNF counts |
+
+### DM commands
+
+Players can DM the bot handle with these keywords:
+
+| Command | Action |
+|---|---|
+| `stop` | Stop receiving reply reactions. Still appears in leaderboards. |
+| `start` | Re-enable reply reactions. |
+| `stats` | Receive a personal stats card (see below). |
+
+#### Stats card
+
+Sending `stats` triggers a DM reply with a full personal breakdown:
+
+```
+📊 Routle stats — @busonly
+
+🎮 47 games  🔥 streak 5d  (best 12d)
+⭐ 8 aces  💀 3 DNFs
+⌀ avg 2.38  ·  best 1
+
+1▸ ████ 8
+2▸ ████████ 16
+3▸ ███████ 15
+4▸ ██ 5
+5▸ 0
+✗▸ 3
+```
+
+Stats are drawn from all data files and work regardless of opt-out status.
 
 ---
 

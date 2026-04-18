@@ -29,6 +29,7 @@ from config import (
     RANKING_METHOD, MIN_DAYS_THRESHOLD, BEST_OF_N_DAYS,
     WEEKLY_RANKING_METHOD, MONTHLY_RANKING_METHOD,
     YEARLY_RANKING_METHOD, CUSTOM_RANKING_METHOD,
+    ACE_MILESTONES, GAMES_MILESTONES, DNF_MILESTONE_EVERY,
 )
 
 # ─── Bluesky API helpers ───────────────────────────────────────────────────────
@@ -707,10 +708,71 @@ def save_optouts(optouts: set):
     os.replace(_tmp, OPTOUTS_FILE)
 
 
+def format_player_stats(handle: str, scores: dict, aces: dict,
+                        streaks: dict, dnf_counts: dict) -> str:
+    """
+    Build a personal stats DM for a player. Fits within Bluesky's 300-char limit.
+    Called when a player DMs the bot with the word STATS.
+    """
+    # ── Gather raw numbers ────────────────────────────────────────────────────
+    all_dates = sorted(scores.keys())
+    player_scores = [scores[d][handle] for d in all_dates if handle in scores[d]]
+
+    games       = len(player_scores)
+    aces_count  = aces.get(handle, 0)
+    dnfs        = dnf_counts.get(handle, 0)
+    streak_data = streaks.get(handle, {})
+    current_str = streak_data.get("current", 0)
+    best_str    = streak_data.get("best", 0)
+
+    if not games:
+        return f"📊 No {GAME_NAME} results on record for @{_short_handle(handle)} yet!"
+
+    # ── Derived stats ─────────────────────────────────────────────────────────
+    non_dnf   = [s for s in player_scores if s != DNF]
+    avg_score = round(sum(non_dnf) / len(non_dnf), 2) if non_dnf else None
+    best      = min(non_dnf) if non_dnf else None
+
+    # Score distribution (1–MAX_SQUARES + DNF)
+    dist = {i: 0 for i in range(1, MAX_SQUARES + 1)}
+    dist["✗"] = 0
+    for s in player_scores:
+        if s == DNF:
+            dist["✗"] += 1
+        elif s in dist:
+            dist[s] += 1
+
+    # Histogram bar (max 7 chars wide so lines stay short)
+    max_count = max((v for v in dist.values()), default=1) or 1
+    def _bar(n: int) -> str:
+        filled = round(n / max_count * 7)
+        return "█" * filled if filled else ("▏" if n > 0 else "")
+
+    # ── Build lines, stay under 300 chars ─────────────────────────────────────
+    short = _short_handle(handle)
+    lines = [
+        f"📊 {GAME_NAME} stats — @{short}",
+        "",
+        f"🎮 {games} games  🔥 streak {current_str}d  (best {best_str}d)",
+        f"⭐ {aces_count} aces  💀 {dnfs} DNFs",
+    ]
+    if avg_score is not None:
+        lines.append(f"⌀ avg {avg_score}  ·  best {best}")
+    lines.append("")
+    for key in list(range(1, MAX_SQUARES + 1)) + ["✗"]:
+        n = dist[key]
+        label = str(key) if key != "✗" else "✗"
+        lines.append(f"{label}▸ {_bar(n)} {n}")
+
+    return "\n".join(lines)
+
+
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     """
-    Poll the bot's DM inbox for messages containing STOP.
-    Adds senders to the optout list and sends a confirmation DM.
+    Poll the bot's DM inbox for messages containing STOP, START, or STATS.
+    - STOP  : adds sender to optout list, sends confirmation DM.
+    - START : removes sender from optout list, sends welcome-back DM.
+    - STATS : sends sender a personal stats card DM.
     Returns list of newly opted-out handles.
     """
     token = session["accessJwt"]
@@ -749,8 +811,9 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
 
         is_stop  = "STOP"  in msg_text
         is_start = "START" in msg_text
+        is_stats = msg_text == "STATS"   # exact match to avoid false positives
 
-        if not is_stop and not is_start:
+        if not is_stop and not is_start and not is_stats:
             continue
 
         # Find the sender (the non-bot member)
@@ -789,6 +852,18 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
             optouts.discard(sender_handle)
             if not dry_run:
                 _send_dm("Welcome back! Routle bot replies are back on for you. 🟩")
+
+        elif is_stats:
+            print(f"  📊 Stats request from @{sender_handle}")
+            if not dry_run:
+                scores     = load_scores()
+                aces       = load_aces()
+                streaks    = load_streaks()
+                dnf_counts = load_dnf_counts()
+                stats_msg  = format_player_stats(
+                    sender_handle, scores, aces, streaks, dnf_counts
+                )
+                _send_dm(stats_msg)
 
     save_optouts(optouts)
     return newly_opted_out
@@ -862,10 +937,10 @@ def games_played_count(scores: dict, handle: str) -> int:
 
 
 # ─── Milestone detection ───────────────────────────────────────────────────────
-
-ACE_MILESTONES    = {5, 10, 25, 50, 100, 200, 500}
-GAMES_MILESTONES  = {3, 7, 25, 50, 100, 200, 300, 365}
-DNF_MILESTONE_EVERY = 5   # fire every N DNFs
+# Thresholds are configured in config.py:
+#   ACE_MILESTONES      — set of ace counts that trigger a milestone reply
+#   GAMES_MILESTONES    — set of games-played counts that trigger a milestone reply
+#   DNF_MILESTONE_EVERY — fire every N DNFs (integer)
 
 
 def is_ace_milestone(count: int) -> bool:
@@ -880,18 +955,30 @@ def is_dnf_milestone(count: int) -> bool:
     return count > 0 and count % DNF_MILESTONE_EVERY == 0
 
 
+def _stars(count: int) -> str:
+    """Return a star string for ace milestone messages.
+    Up to 10: individual ⭐ icons. Above 10: ⭐×N."""
+    if count <= 10:
+        return "⭐" * count
+    return f"⭐×{count}"
+
+
 def make_milestone_post(handle: str, display_name: str,
                         kind: str, count: int) -> str:
     """
     Build a milestone message. kind is "ace", "games", or "dnf".
     Falls back gracefully if no messages configured.
+    Placeholders: {display_name}, {handle}, {count}, {stars} (ace only).
     """
     from config import MILESTONE_MESSAGES
     pool = MILESTONE_MESSAGES.get(kind, [])
     if not pool:
         return ""
     return random.choice(pool).format(
-        display_name=display_name, handle=handle, count=count
+        display_name=display_name,
+        handle=handle,
+        count=count,
+        stars=_stars(count) if kind == "ace" else "",
     )
 
 

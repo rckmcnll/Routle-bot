@@ -8,9 +8,9 @@ BOT_PASSWORD = "xxxx-xxxx-xxxx-xxxx"       # Use an App Password from bsky Setti
 
 # ── Custom feed to monitor ────────────────────────────────────────────────────
 # Feed URL: https://bsky.app/profile/<FEED_CREATOR_HANDLE>/feed/<FEED_SLUG>
-# Example:  https://bsky.app/profile/rockom.bsky.social/feed/routle
-FEED_CREATOR_HANDLE = "rockom.bsky.social"  # Profile that owns the feed generator
-FEED_SLUG           = "routle"              # The short name after /feed/
+# Example:  https://bsky.app/profile/feedowner.bsky.social/feed/your-feed-slug
+FEED_CREATOR_HANDLE = "feedowner.bsky.social"  # Profile that owns the feed generator
+FEED_SLUG           = "your-feed-slug"         # The short name after /feed/
 
 # ── Game settings ─────────────────────────────────────────────────────────────
 GAME_NAME   = "Routle"
@@ -282,6 +282,16 @@ SCORE_MESSAGES = {
     ],
 }
 
+# ── Milestone thresholds ─────────────────────────────────────────────────────
+# Ace counts that trigger a milestone reply (in addition to every 100 after 100)
+ACE_MILESTONES     = {5, 10, 25, 50, 100, 200, 500}
+
+# Games-played counts that trigger a milestone reply
+GAMES_MILESTONES   = {3, 7, 25, 50, 100, 200, 300, 365}
+
+# Fire a DNF milestone every N DNFs
+DNF_MILESTONE_EVERY = 5
+
 # ── Milestone messages ────────────────────────────────────────────────────────
 # Fired as a separate reply when a player hits a milestone.
 # Placeholders: {display_name}, {handle}, {count}
@@ -292,16 +302,16 @@ SCORE_MESSAGES = {
 
 MILESTONE_MESSAGES = {
     "ace": [
-        "🏅 {display_name} — {count} first-guess aces. This is not a hobby. This is a calling.",
-        "⭐ {count} aces for {display_name}. The hall of fame committee has convened. The vote was unanimous.",
-        "🏆 {count} aces! {display_name} is not playing the same game as the rest of us anymore.",
-        "🎖️ {display_name} has {count} all-time aces. There should be a statue. We are looking into it.",
-        "🌟 {count} first-guess aces for {display_name}. Future generations will study this.",
-        "🗺️ {count} aces. {display_name} doesn't consult the map. The map consults {display_name}.",
-        "🚌 {count} aces! TriMet has quietly begun rerouting buses in {display_name}'s honour.",
-        "🎲 {count} aces. That's not luck. That's not skill. That's something we don't have a word for yet.",
-        "📜 Let it be recorded: {display_name}, {count} aces. The scribe's hand trembled slightly while writing this.",
-        "🔑 {count} aces for {display_name}. At this point they probably *wrote* some of these routes.",
+        "{stars} 🏅 {display_name} — {count} first-guess aces. This is not a hobby. This is a calling.",
+        "{stars} ⭐ {count} aces for {display_name}. The hall of fame committee has convened. The vote was unanimous.",
+        "{stars} 🏆 {count} aces! {display_name} is not playing the same game as the rest of us anymore.",
+        "{stars} 🎖️ {display_name} has {count} all-time aces. There should be a statue. We are looking into it.",
+        "{stars} 🌟 {count} first-guess aces for {display_name}. Future generations will study this.",
+        "{stars} 🗺️ {count} aces. {display_name} doesn't consult the map. The map consults {display_name}.",
+        "{stars} 🚌 {count} aces! TriMet has quietly begun rerouting buses in {display_name}'s honour.",
+        "{stars} 🎲 {count} aces. That's not luck. That's not skill. That's something we don't have a word for yet.",
+        "{stars} 📜 Let it be recorded: {display_name}, {count} aces. The scribe's hand trembled slightly while writing this.",
+        "{stars} 🔑 {count} aces for {display_name}. At this point they probably *wrote* some of these routes.",
     ],
     "games": [
         "🎮 {display_name} has played {count} games of Routle. A pattern is forming. It's a beautiful pattern.",
