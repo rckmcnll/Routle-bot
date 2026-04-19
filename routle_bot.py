@@ -42,11 +42,15 @@ def setup_logging(
     log_file: str | None = None,
     level: int | None = None,
     backup_count: int | None = None,
+    dry_run: bool = False,
 ) -> None:
     """
     Configure root logger with a timestamped console handler and a rotating
     file handler. Defaults come from config.py (LOG_FILE, LOG_LEVEL,
     LOG_BACKUP_COUNT). Idempotent — safe to call more than once.
+
+    When dry_run=True the console handler is forced to DEBUG so all output
+    is visible regardless of LOG_LEVEL. The file handler always uses LOG_LEVEL.
     """
     from logging.handlers import RotatingFileHandler
 
@@ -59,7 +63,7 @@ def setup_logging(
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     root = logging.getLogger()
-    root.setLevel(_level)
+    root.setLevel(logging.DEBUG)   # root passes everything; handlers filter
 
     # Clear any handlers Python added automatically (e.g. lastResort) before
     # setup was called, so we never end up with duplicates.
@@ -67,10 +71,12 @@ def setup_logging(
 
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
+    sh.setLevel(logging.DEBUG if dry_run else _level)
     root.addHandler(sh)
 
     fh = RotatingFileHandler(_file, maxBytes=5_000_000, backupCount=_backups)
     fh.setFormatter(fmt)
+    fh.setLevel(_level)
     root.addHandler(fh)
 
 
@@ -1540,8 +1546,6 @@ def run_standings(
 if __name__ == "__main__":
     import argparse
 
-    setup_logging()
-
     parser = argparse.ArgumentParser(description=f"{GAME_NAME} Bluesky leaderboard bot")
     parser.add_argument(
         "--period",
@@ -1563,6 +1567,7 @@ if __name__ == "__main__":
     parser.add_argument("--from", dest="from_date", help="Start date for custom standings (YYYY-MM-DD).")
     parser.add_argument("--to", dest="to_date", help="End date for custom standings (YYYY-MM-DD, default: today).")
     args = parser.parse_args()
+    setup_logging(dry_run=args.dry_run)
 
     if args.create_list:
         session = login(BOT_HANDLE, BOT_PASSWORD)
