@@ -476,6 +476,31 @@ def _short_handle(handle: str) -> str:
     return handle.split(".")[0]
 
 
+# Unicode Mathematical Monospace block offsets
+_MONO_UPPER = 0x1D670 - ord('A')   # 𝙰–𝚉
+_MONO_LOWER = 0x1D68A - ord('a')   # 𝚊–𝚣
+_MONO_DIGIT = 0x1D7F6 - ord('0')   # 𝟶–𝟿
+
+
+def _mono(text: str) -> str:
+    """
+    Convert ASCII letters and digits to their Unicode Mathematical Monospace
+    equivalents so tabular columns align in Bluesky posts regardless of client
+    font. Non-ASCII characters (emoji, symbols) are passed through unchanged.
+    """
+    out = []
+    for ch in text:
+        if 'A' <= ch <= 'Z':
+            out.append(chr(ord(ch) + _MONO_UPPER))
+        elif 'a' <= ch <= 'z':
+            out.append(chr(ord(ch) + _MONO_LOWER))
+        elif '0' <= ch <= '9':
+            out.append(chr(ord(ch) + _MONO_DIGIT))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 BSKY_LIMIT = 300  # Bluesky grapheme limit per post
 
 
@@ -518,7 +543,7 @@ def format_daily_leaderboard(date_str: str, day_scores: dict) -> str:
         if score != prev_score:
             rank = i + 1
             prev_score = score
-        player_lines.append(f"{_grid_display(score)} {_medal(rank)} @{_short_handle(handle)}")
+        player_lines.append(f"{_grid_display(score)} {_medal(rank)} @{_mono(_short_handle(handle))}")
 
     omitted = 0
     while player_lines:
@@ -581,7 +606,8 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     short_names = [_short_handle(h) for h, _ in ranked]
     name_w = max((len(sn) for sn in short_names), default=8)
 
-    player_rows = []
+    # Pre-compute all row strings so we can measure column widths before rendering
+    row_data = []
     prev_key   = None
     rank       = 0
     elig_count = 0
@@ -592,22 +618,28 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
                 rank     = elig_count + 1
                 prev_key = s["rank_key"]
             elig_count += 1
-            medal = _medal(rank)
+            rank_label = f"{rank}."
         else:
-            medal = "—"                        # below threshold, shown but unranked
+            rank_label = "—"                   # below threshold, shown but unranked
 
-        dnf_str = f" {s['dnf']}✗" if s["dnf"] else ""
-        ace_str = " ⭐" if s["best"] == 1 else ""
-
-        # Primary stat — method-specific label or fallback to total 🟩
-        stat = s.get("rank_stat")
+        dnf_str  = f" {s['dnf']}✗" if s["dnf"] else ""
+        ace_str  = " ⭐" if s["best"] == 1 else ""
+        stat     = s.get("rank_stat")
         stat_col = stat if stat else f"{s['total']}🟩"
+        days_str = f"{s['days']}/{active_days}d"
+        row_data.append((rank_label, short, stat_col, days_str, dnf_str, ace_str))
 
+    rank_w = max((len(r[0]) for r in row_data), default=2)
+    stat_w = max((len(r[2]) for r in row_data), default=0)
+    days_w = max((len(r[3]) for r in row_data), default=0)
+
+    player_rows = []
+    for rank_label, short, stat_col, days_str, dnf_str, ace_str in row_data:
         player_rows.append(
-            f"{medal} {short:<{name_w}}  "
-            f"{stat_col}  "
-            f"{s['days']}/{active_days}d"
-            f"{dnf_str}{ace_str}"
+            f"{_mono(f'{rank_label:>{rank_w}}')} {_mono(f'{short:<{name_w}}')}  "
+            f"{_mono(f'{stat_col:<{stat_w}}')}  "
+            f"{_mono(f'{days_str:>{days_w}}')}"
+            f"{_mono(dnf_str)}{ace_str}"
         )
 
     # Split into pages fitting within BSKY_LIMIT
@@ -792,25 +824,26 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
 
     # Histogram bar (max 7 chars wide so lines stay short)
     max_count = max((v for v in dist.values()), default=1) or 1
+    count_w   = len(str(max_count))
     def _bar(n: int) -> str:
         filled = round(n / max_count * 7)
-        return "█" * filled if filled else ("▏" if n > 0 else "")
+        return "█" * filled if filled else ("▏" if n > 0 else " " * 0)
 
     # ── Build lines, stay under 300 chars ─────────────────────────────────────
     short = _short_handle(handle)
     lines = [
-        f"📊 {GAME_NAME} stats — @{short}",
+        f"📊 {GAME_NAME} stats — @{_mono(short)}",
         "",
-        f"🎮 {games} games  🔥 streak {current_str}d  (best {best_str}d)",
-        f"⭐ {aces_count} aces  💀 {dnfs} DNFs",
+        f"🎮 {_mono(str(games))} games  🔥 streak {_mono(str(current_str))}d  (best {_mono(str(best_str))}d)",
+        f"⭐ {_mono(str(aces_count))} aces  💀 {_mono(str(dnfs))} DNFs",
     ]
     if avg_score is not None:
-        lines.append(f"⌀ avg {avg_score}  ·  best {best}")
+        lines.append(f"⌀ avg {_mono(str(avg_score))}  ·  best {_mono(str(best))}")
     lines.append("")
     for key in list(range(1, MAX_SQUARES + 1)) + ["✗"]:
         n = dist[key]
         label = str(key) if key != "✗" else "✗"
-        lines.append(f"{label}▸ {_bar(n)} {n}")
+        lines.append(f"{_mono(label)}▸ {_bar(n)} {_mono(f'{n:>{count_w}}')}")
 
     return "\n".join(lines)
 
