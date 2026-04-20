@@ -486,7 +486,9 @@ def _mono(text: str) -> str:
     """
     Convert ASCII letters and digits to their Unicode Mathematical Monospace
     equivalents so tabular columns align in Bluesky posts regardless of client
-    font. Non-ASCII characters (emoji, symbols) are passed through unchanged.
+    font. Spaces are mapped to figure space (U+2007) which is defined as the
+    same width as a digit — matching the monospace glyph width precisely.
+    Non-ASCII characters (emoji, symbols) are passed through unchanged.
     """
     out = []
     for ch in text:
@@ -496,6 +498,8 @@ def _mono(text: str) -> str:
             out.append(chr(ord(ch) + _MONO_LOWER))
         elif '0' <= ch <= '9':
             out.append(chr(ord(ch) + _MONO_DIGIT))
+        elif ch == ' ':
+            out.append('\u2007')   # figure space — same width as a digit
         else:
             out.append(ch)
     return "".join(out)
