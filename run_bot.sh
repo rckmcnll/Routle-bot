@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 VENV_DIR="$SCRIPT_DIR/.venv"
-LOG_FILE="$SCRIPT_DIR/bot.log"
+LOG_FILE="$SCRIPT_DIR/$(python3 -c "import sys; sys.path.insert(0,'$SCRIPT_DIR'); import config; print(getattr(config,'LOG_FILE','bot.log'))" 2>/dev/null || echo "bot.log")"
 PID_FILE="$SCRIPT_DIR/bot.pid"
 
 # ── Colours ───────────────────────────────────────────────────────────────────

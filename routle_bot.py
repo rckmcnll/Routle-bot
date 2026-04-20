@@ -31,8 +31,11 @@ from config import (
     WEEKLY_RANKING_METHOD, MONTHLY_RANKING_METHOD,
     YEARLY_RANKING_METHOD, CUSTOM_RANKING_METHOD,
     ACE_MILESTONES, GAMES_MILESTONES, DNF_MILESTONE_EVERY,
-    LOG_FILE, LOG_LEVEL, LOG_BACKUP_COUNT,
 )
+import config as _config
+LOG_FILE         = getattr(_config, "LOG_FILE",         "bot.log")
+LOG_LEVEL        = getattr(_config, "LOG_LEVEL",        "INFO")
+LOG_BACKUP_COUNT = getattr(_config, "LOG_BACKUP_COUNT", 3)
 
 logger = logging.getLogger(__name__)
 
