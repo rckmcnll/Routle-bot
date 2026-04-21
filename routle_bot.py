@@ -36,6 +36,7 @@ import config as _config
 LOG_FILE         = getattr(_config, "LOG_FILE",         "bot.log")
 LOG_LEVEL        = getattr(_config, "LOG_LEVEL",        "INFO")
 LOG_BACKUP_COUNT = getattr(_config, "LOG_BACKUP_COUNT", 3)
+RECORDS_FILE     = getattr(_config, "RECORDS_FILE",     "records.json")
 
 logger = logging.getLogger(__name__)
 
@@ -1036,7 +1037,158 @@ def games_played_count(scores: dict, handle: str) -> int:
     return sum(1 for day in scores.values() if handle in day)
 
 
-# ─── Milestone detection ───────────────────────────────────────────────────────
+# ─── Community records tracking ───────────────────────────────────────────────
+# records.json structure:
+# {
+#   "daily_players":    {"record": 12, "date": "2026-04-09"},
+#   "weekly_players":   {"record": 18, "date": "2026-04-06"},   ← week start (Monday)
+#   "monthly_players":  {"record": 22, "date": "2026-04"},
+#   "new_players_day":  {"record": 5,  "date": "2026-04-01"},
+#   "new_players":      {"YYYY-MM-DD": N, ...},                 ← daily new-player counts
+#   "daily_score_1":    {"record": 7,  "date": "2026-04-09"},   ← most aces in a day
+#   "daily_score_2":    {"record": 5,  "date": "2026-04-09"},   ← most guess-2s in a day
+#   "daily_score_3":    {"record": 4,  "date": "2026-04-09"},
+#   "daily_score_4":    {"record": 3,  "date": "2026-04-09"},
+#   "daily_score_5":    {"record": 2,  "date": "2026-04-09"},
+#   "daily_score_6":    {"record": 3,  "date": "2026-04-09"},   ← most DNFs (DNF = MAX_SQUARES+1)
+# }
+
+def load_records() -> dict:
+    if os.path.exists(RECORDS_FILE):
+        with open(RECORDS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_records(records: dict):
+    _tmp = RECORDS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(records, f, indent=2, sort_keys=True)
+    os.replace(_tmp, RECORDS_FILE)
+
+
+def count_new_players(scores: dict, known_before: set, date_str: str) -> int:
+    """
+    Count players who appear for the first time on date_str
+    (i.e. have no scores on any earlier date).
+    known_before is the set of all handles seen before date_str.
+    """
+    today_handles = set(scores.get(date_str, {}).keys())
+    return len(today_handles - known_before)
+
+
+def check_and_update_records(
+    scores: dict,
+    date_str: str,
+    period: str,
+) -> list[str]:
+    """
+    Check whether today's/this week's/this month's player counts set new records.
+    Updates records.json in place and returns a list of record-broken messages
+    (empty if no records broken).
+
+    period : "daily" | "weekly" | "monthly"
+    """
+    records  = load_records()
+    broken   = []
+    ref      = datetime.date.fromisoformat(date_str)
+
+    if period == "daily":
+        day_scores = scores.get(date_str, {})
+
+        # ── Daily player count ────────────────────────────────────────────────
+        day_count = len(day_scores)
+        prev      = records.get("daily_players", {})
+        if day_count > prev.get("record", 0):
+            records["daily_players"] = {"record": day_count, "date": date_str}
+            broken.append(
+                f"📈 New daily record: {day_count} players today"
+                + (f" (previous: {prev['record']} on {prev['date']})" if prev else "")
+            )
+
+        # ── Per-score daily records (1 ace through 5, plus DNF) ───────────────
+        _score_meta = {
+            1:   ("🟩", "aces"),
+            2:   ("🟨", "guess-2s"),
+            3:   ("🟧", "guess-3s"),
+            4:   ("🟥", "guess-4s"),
+            5:   ("💀", "guess-5s"),
+            DNF: ("❌", "DNFs"),
+        }
+        score_counts: dict[int, int] = {}
+        for sc in day_scores.values():
+            score_counts[sc] = score_counts.get(sc, 0) + 1
+
+        for score_val, (emoji, label) in _score_meta.items():
+            count = score_counts.get(score_val, 0)
+            if count == 0:
+                continue
+            key  = f"daily_score_{score_val}"
+            prev = records.get(key, {})
+            if count > prev.get("record", 0):
+                records[key] = {"record": count, "date": date_str}
+                broken.append(
+                    f"{emoji} Most {label} in a day: {count}"
+                    + (f" (previous: {prev['record']} on {prev['date']})" if prev else "")
+                )
+
+        # ── New players today ─────────────────────────────────────────────────
+        all_dates      = sorted(scores.keys())
+        prior_dates    = [d for d in all_dates if d < date_str]
+        known_before   = {h for d in prior_dates for h in scores[d]}
+        new_today      = count_new_players(scores, known_before, date_str)
+
+        # Store per-day new-player count
+        np = records.setdefault("new_players", {})
+        np[date_str] = new_today
+
+        prev_np = records.get("new_players_day", {})
+        if new_today > prev_np.get("record", 0):
+            records["new_players_day"] = {"record": new_today, "date": date_str}
+            broken.append(
+                f"👋 New players record: {new_today} new player{'s' if new_today != 1 else ''} today"
+                + (f" (previous: {prev_np['record']} on {prev_np['date']})" if prev_np else "")
+            )
+
+    elif period == "weekly":
+        # ── Weekly unique player count ────────────────────────────────────────
+        monday   = ref - datetime.timedelta(days=ref.weekday())
+        keys     = [(monday + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+        players  = {h for k in keys for h in scores.get(k, {})}
+        count    = len(players)
+        prev     = records.get("weekly_players", {})
+        if count > prev.get("record", 0):
+            records["weekly_players"] = {"record": count, "date": monday.isoformat()}
+            broken.append(
+                f"📈 New weekly record: {count} unique players this week"
+                + (f" (previous: {prev['record']} w/c {prev['date']})" if prev else "")
+            )
+
+    elif period == "monthly":
+        # ── Monthly unique player count ───────────────────────────────────────
+        month_prefix = date_str[:7]   # "YYYY-MM"
+        players      = {h for k, v in scores.items() if k.startswith(month_prefix) for h in v}
+        count        = len(players)
+        prev         = records.get("monthly_players", {})
+        if count > prev.get("record", 0):
+            records["monthly_players"] = {"record": count, "date": month_prefix}
+            broken.append(
+                f"📈 New monthly record: {count} unique players this month"
+                + (f" (previous: {prev['record']} in {prev['date']})" if prev else "")
+            )
+
+    save_records(records)
+    return broken
+
+
+def format_records_reply(broken: list[str], date_str: str) -> str:
+    """Format a reply post announcing broken records."""
+    date_display = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%B %-d, %Y")
+    lines = [f"🏅 {GAME_NAME} community records — {date_display}", ""] + broken
+    return "\n".join(lines)
+
+
+
 # Thresholds are configured in config.py:
 #   ACE_MILESTONES      — set of ace counts that trigger a milestone reply
 #   GAMES_MILESTONES    — set of games-played counts that trigger a milestone reply
@@ -1379,20 +1531,21 @@ def _await_indexed(uri: str, token: str, timeout: int = 30, interval: float = 2.
     return False
 
 
-def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, pin: bool = True):
+def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, pin: bool = True) -> dict | None:
     """
     Post a period standings. First page is a top-level post;
     subsequent pages are threaded as replies, each replying to the previous.
     pin: whether to pin the first page to the bot profile (False for ad-hoc posts).
     After each post we poll the AppView until it confirms the post is indexed
     before posting the next reply — this prevents broken thread chains.
+    Returns the root post ref {"uri": ..., "cid": ...} or None on failure/dry_run.
     """
     if not pages:
-        return
+        return None
     # Post page 1 — this becomes the thread root
     root_result = _post_and_print(label, pages[0], session, dry_run, pin=pin)
     if len(pages) == 1:
-        return
+        return root_result
 
     # root_ref stays fixed as page 1 for the whole thread.
     # prev_ref advances to each new post so parent chains correctly.
@@ -1405,6 +1558,8 @@ def _post_standings(label: str, pages: list[str], session: dict, dry_run: bool, 
             cont_label, page, session, dry_run,
             reply_to=prev_ref, root_ref=root_ref,
         )
+
+    return root_result
 
 
 # ─── Public run functions (used by scheduler + CLI) ────────────────────────────
@@ -1431,7 +1586,23 @@ def run(
     save_scores(scores)
 
     if period in ("daily", "all"):
-        _post_and_print("Daily", format_daily_leaderboard(ref.isoformat(), scores.get(ref.isoformat(), {})), session, dry_run)
+        daily_ref = _post_and_print(
+            "Daily",
+            format_daily_leaderboard(ref.isoformat(), scores.get(ref.isoformat(), {})),
+            session, dry_run,
+        )
+        # Check for community records and post as a nested reply if any were broken
+        broken = check_and_update_records(scores, ref.isoformat(), "daily")
+        if broken and daily_ref:
+            records_text = format_records_reply(broken, ref.isoformat())
+            _post_and_print(
+                "Daily records",
+                records_text,
+                session, dry_run,
+                reply_to=daily_ref,
+                root_ref=daily_ref,
+                pin=False,
+            )
 
     for label, pages in [
         ("Weekly",  format_weekly_leaderboard(ref, scores)),
@@ -1440,7 +1611,20 @@ def run(
     ]:
         if period not in (label.lower(), "all"):
             continue
-        _post_standings(label, pages, session, dry_run)
+        root_ref = _post_standings(label, pages, session, dry_run)
+        # Check records for weekly and monthly periods
+        if label in ("Weekly", "Monthly") and root_ref:
+            broken = check_and_update_records(scores, ref.isoformat(), label.lower())
+            if broken:
+                records_text = format_records_reply(broken, ref.isoformat())
+                _post_and_print(
+                    f"{label} records",
+                    records_text,
+                    session, dry_run,
+                    reply_to=root_ref,
+                    root_ref=root_ref,
+                    pin=False,
+                )
 
 
 def backfill(session: dict | None = None, dry_run: bool = False, date_filter: str | None = None) -> int:

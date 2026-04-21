@@ -63,7 +63,8 @@ Players DM `stats` to receive a personal stats card — games played, current an
 ### Routlers list
 Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded.
 
-### Reliable threaded posting
+### Community records
+After each daily, weekly, and monthly leaderboard post, the bot checks whether any records were broken — most players in a single day, week, or month, and most new players joining in a single day. If a record falls, a reply is posted as a nested thread under the leaderboard announcing the new high. Previous record and date are included for context. Records are stored in `records.json` and accumulate automatically from first run.
 Multi-page standings use correct Bluesky thread structure (`root` always points to page 1, `parent` to the immediately preceding post). Each post is confirmed as indexed in the AppView before the next reply is posted. Failed posts are retried up to 3 times.
 
 ### Feed polling
@@ -92,7 +93,7 @@ cd routle-bot
 ### 2. Configure
 
 ```bash
-cp config_example.py config.py
+cp config.example.py config.py
 ```
 
 Edit `config.py`. Required fields:
@@ -234,6 +235,7 @@ help         Show help
 | `OPTOUTS_FILE` | `optouts.json` | Opted-out handles |
 | `KNOWN_PLAYERS_FILE` | `known_players.json` | Players added to Routlers list |
 | `DNF_COUNTS_FILE` | `dnf_counts.json` | All-time DNF counts |
+| `RECORDS_FILE` | `records.json` | Community records (player count highs, new player highs) |
 
 ### Logging
 
@@ -307,6 +309,7 @@ All files created automatically on first run. Safe to edit manually.
 | `optouts.json` | `["handle", ...]` |
 | `known_players.json` | `{"handle": "did:plc:..."}` |
 | `dnf_counts.json` | `{"handle": total_dnf_count}` |
+| `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}}` |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 

@@ -96,6 +96,7 @@ STREAKS_FILE  = "streaks.json"        # Consecutive daily play streaks
 OPTOUTS_FILE       = "optouts.json"        # Handles that have DM'd STOP
 KNOWN_PLAYERS_FILE = "known_players.json"  # Players already added to the Routlers list
 DNF_COUNTS_FILE    = "dnf_counts.json"     # All-time DNF counts per player
+RECORDS_FILE       = "records.json"        # Community records (player count highs etc.)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_FILE         = "bot.log"   # Path to the rotating log file
