@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v5.5
+# 🚌 Routle Bot — v5
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
@@ -93,7 +93,7 @@ cd routle-bot
 ### 2. Configure
 
 ```bash
-cp config_example.py config.py
+cp config.example.py config.py
 ```
 
 Edit `config.py`. Required fields:
@@ -143,18 +143,20 @@ Copy the printed URI into `config.py` as `ROUTLERS_LIST_URI`.
 ## Shell script reference
 
 ```
-run          Fetch results + post today's leaderboard (once)
-dry-run      Fetch results + print leaderboard (don't post)
-collect      Fetch & save results only, no leaderboard or reactions
-standings    Post an ad-hoc standings (see examples below)
-backfill     Fire reactions for all results already in scores.json
-start        Start the scheduler in the background
-stop         Stop the background scheduler
-status       Show scheduler status + score stats
-logs         Tail the bot log (Ctrl+C to exit)
-install      Set up virtual environment + install dependencies
-create-list  Create the Routlers Bluesky list and print URI for config
-help         Show help
+run              Fetch results + post today's leaderboard (once)
+dry-run          Fetch results + print leaderboard (don't post)
+collect          Fetch & save results only, no leaderboard or reactions
+standings        Post an ad-hoc standings (see examples below)
+backfill         Fire reactions for all results already in scores.json
+rebuild-records  Recompute records.json from scratch using scores.json
+announce         Post a freeform message from the bot account
+start            Start the scheduler in the background
+stop             Stop the background scheduler
+status           Show scheduler status + score stats
+logs             Tail the bot log (Ctrl+C to exit)
+install          Set up virtual environment + install dependencies
+create-list      Create the Routlers Bluesky list and print URI for config
+help             Show help
 ```
 
 ### Standings examples
@@ -198,6 +200,8 @@ help         Show help
 | `LEADERBOARD_TIME` | `21:00` | Time for daily leaderboard and period standings (24h local) |
 | `WEEKLY_LEADERBOARD_DAY` | `6` | Day of week for weekly standings (0=Mon … 6=Sun) |
 | `POLL_INTERVAL_MINUTES` | `5` | How often to check the feed for new results |
+| `QUIET_HOURS_START` | `23:00` | Start of quiet window — reactions suppressed, scores still recorded |
+| `QUIET_HOURS_END` | `07:00` | End of quiet window. Overnight ranges (e.g. 23:00–07:00) work correctly. Set both to `00:00` to disable |
 
 ### Standings
 

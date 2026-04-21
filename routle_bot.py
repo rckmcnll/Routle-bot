@@ -37,6 +37,8 @@ LOG_FILE         = getattr(_config, "LOG_FILE",         "bot.log")
 LOG_LEVEL        = getattr(_config, "LOG_LEVEL",        "INFO")
 LOG_BACKUP_COUNT = getattr(_config, "LOG_BACKUP_COUNT", 3)
 RECORDS_FILE     = getattr(_config, "RECORDS_FILE",     "records.json")
+QUIET_HOURS_START = getattr(_config, "QUIET_HOURS_START", "23:00")
+QUIET_HOURS_END   = getattr(_config, "QUIET_HOURS_END",   "07:00")
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,22 @@ def setup_logging(
     fh.setFormatter(fmt)
     fh.setLevel(_level)
     root.addHandler(fh)
+
+
+def _in_quiet_hours() -> bool:
+    """
+    Return True if the current local time falls within the configured quiet window.
+    Handles overnight ranges (e.g. 23:00–07:00) correctly.
+    Returns False if start == end (quiet hours disabled).
+    """
+    if QUIET_HOURS_START == QUIET_HOURS_END:
+        return False
+    now  = datetime.datetime.now().strftime("%H:%M")
+    s, e = QUIET_HOURS_START, QUIET_HOURS_END
+    if s < e:                     # same-day range e.g. 01:00–06:00
+        return s <= now < e
+    else:                         # overnight range e.g. 23:00–07:00
+        return now >= s or now < e
 
 
 # ─── Bluesky API helpers ───────────────────────────────────────────────────────
@@ -821,6 +839,19 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
     avg_score = round(sum(non_dnf) / len(non_dnf), 2) if non_dnf else None
     best      = min(non_dnf) if non_dnf else None
 
+    # ── All-time avg rank (among players with at least 3 games) ──────────────
+    all_avgs = {}
+    for h in {h for day in scores.values() for h in day}:
+        h_scores = [scores[d][h] for d in all_dates if h in scores.get(d, {})]
+        h_non_dnf = [s for s in h_scores if s != DNF]
+        if len(h_scores) >= 3 and h_non_dnf:
+            all_avgs[h] = sum(h_non_dnf) / len(h_non_dnf)
+    rank_str = None
+    if handle in all_avgs and len(all_avgs) >= 2:
+        sorted_handles = sorted(all_avgs, key=lambda h: all_avgs[h])
+        rank_pos  = sorted_handles.index(handle) + 1
+        rank_str  = f"{rank_pos} of {len(all_avgs)}"
+
     # Score distribution (1–MAX_SQUARES + DNF)
     dist = {i: 0 for i in range(1, MAX_SQUARES + 1)}
     dist["✗"] = 0
@@ -846,7 +877,10 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
         f"⭐ {_mono(str(aces_count))} aces  💀 {_mono(str(dnfs))} DNFs",
     ]
     if avg_score is not None:
-        lines.append(f"⌀ avg {_mono(str(avg_score))}  ·  best {_mono(str(best))}")
+        avg_line = f"⌀ avg {_mono(str(avg_score))}  ·  best {_mono(str(best))}  (excl. DNFs)"
+        if rank_str:
+            avg_line += f"  ·  rank {_mono(rank_str)}"
+        lines.append(avg_line)
     lines.append("")
     for key in list(range(1, MAX_SQUARES + 1)) + ["✗"]:
         n = dist[key]
@@ -960,7 +994,7 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
             if not dry_run:
                 _send_dm(
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
-                    "STATS — get your personal stats card\n"
+                    "STATS — your personal stats card (games, avg, rank, streaks, aces)\n"
                     "STOP  — turn off reply reactions\n"
                     "START — turn reply reactions back on\n"
                     "HELP  — show this message"
@@ -1339,6 +1373,11 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
             # Skip reactions for opted-out users
             if author in optouts:
                 logger.debug("Skipping reaction — @%s opted out", author)
+                continue
+
+            # Skip reactions during quiet hours (scores already recorded above)
+            if _in_quiet_hours():
+                logger.debug("Skipping reaction — quiet hours (%s–%s)", QUIET_HOURS_START, QUIET_HOURS_END)
                 continue
 
             # Games played milestone check (applies to all scores)
@@ -1770,6 +1809,98 @@ def run_standings(
     _post_standings(period.capitalize(), pages, session, dry_run, pin=False)
 
 
+def rebuild_records() -> None:
+    """
+    Recompute records.json from scratch using scores.json as the source of truth.
+    Safe to run at any time — overwrites the existing records file.
+    """
+    scores = load_scores()
+    if not scores:
+        logger.info("No scores on record — records.json not written.")
+        return
+
+    all_dates = sorted(scores.keys())
+    records: dict = {}
+
+    # ── Daily player count ────────────────────────────────────────────────────
+    best_day = max(all_dates, key=lambda d: len(scores[d]))
+    records["daily_players"] = {"record": len(scores[best_day]), "date": best_day}
+
+    # ── Per-score daily records ───────────────────────────────────────────────
+    score_meta = {
+        1: "aces", 2: "guess-2s", 3: "guess-3s",
+        4: "guess-4s", 5: "guess-5s", DNF: "DNFs",
+    }
+    for sv in score_meta:
+        best: dict[str, object] = {"record": 0, "date": ""}
+        for d in all_dates:
+            n = sum(1 for sc in scores[d].values() if sc == sv)
+            if n > best["record"]:
+                best = {"record": n, "date": d}
+        if best["record"] > 0:
+            records[f"daily_score_{sv}"] = best
+
+    # ── New players per day ───────────────────────────────────────────────────
+    new_players_per_day: dict[str, int] = {}
+    known_before: set[str] = set()
+    best_new: dict[str, object] = {"record": 0, "date": ""}
+    for d in all_dates:
+        today_handles = set(scores[d].keys())
+        new_today = len(today_handles - known_before)
+        new_players_per_day[d] = new_today
+        if new_today > best_new["record"]:
+            best_new = {"record": new_today, "date": d}
+        known_before |= today_handles
+    records["new_players"]     = new_players_per_day
+    records["new_players_day"] = best_new
+
+    # ── Weekly unique players ─────────────────────────────────────────────────
+    best_week: dict[str, object] = {"record": 0, "date": ""}
+    seen_mondays: set = set()
+    for d in all_dates:
+        ref    = datetime.date.fromisoformat(d)
+        monday = ref - datetime.timedelta(days=ref.weekday())
+        if monday in seen_mondays:
+            continue
+        seen_mondays.add(monday)
+        keys    = [(monday + datetime.timedelta(days=i)).isoformat() for i in range(7)]
+        players = {h for k in keys for h in scores.get(k, {})}
+        if len(players) > best_week["record"]:
+            best_week = {"record": len(players), "date": monday.isoformat()}
+    records["weekly_players"] = best_week
+
+    # ── Monthly unique players ────────────────────────────────────────────────
+    best_month: dict[str, object] = {"record": 0, "date": ""}
+    seen_months: set = set()
+    for d in all_dates:
+        month = d[:7]
+        if month in seen_months:
+            continue
+        seen_months.add(month)
+        players = {h for k, v in scores.items() if k.startswith(month) for h in v}
+        if len(players) > best_month["record"]:
+            best_month = {"record": len(players), "date": month}
+    records["monthly_players"] = best_month
+
+    save_records(records)
+    logger.info("records.json rebuilt from %d days of scores.", len(all_dates))
+    logger.info("  daily_players:   %s on %s", records["daily_players"]["record"], records["daily_players"]["date"])
+    logger.info("  weekly_players:  %s w/c %s", records["weekly_players"]["record"], records["weekly_players"]["date"])
+    logger.info("  monthly_players: %s in %s", records["monthly_players"]["record"], records["monthly_players"]["date"])
+    logger.info("  new_players_day: %s on %s", records["new_players_day"]["record"], records["new_players_day"]["date"])
+
+
+def announce(text: str, dry_run: bool = False) -> None:
+    """Post a freeform announcement from the bot account."""
+    if not text.strip():
+        logger.error("Announce text is empty — nothing to post.")
+        return
+    logger.info("Logging in as @%s...", BOT_HANDLE)
+    session = login(BOT_HANDLE, BOT_PASSWORD)
+    logger.info("✓ Logged in.")
+    _post_and_print("Announcement", text, session, dry_run, pin=False)
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -1795,10 +1926,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--from", dest="from_date", help="Start date for custom standings (YYYY-MM-DD).")
     parser.add_argument("--to", dest="to_date", help="End date for custom standings (YYYY-MM-DD, default: today).")
+    parser.add_argument("--rebuild-records", action="store_true",
+        help="Recompute records.json from scratch using scores.json.")
+    parser.add_argument("--announce", metavar="TEXT",
+        help="Post a freeform announcement from the bot account.")
     args = parser.parse_args()
     setup_logging(dry_run=args.dry_run)
 
-    if args.create_list:
+    if args.rebuild_records:
+        rebuild_records()
+    elif args.announce:
+        announce(args.announce, dry_run=args.dry_run)
+    elif args.create_list:
         session = login(BOT_HANDLE, BOT_PASSWORD)
         uri = create_list(
             session,

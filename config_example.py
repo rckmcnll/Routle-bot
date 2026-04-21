@@ -33,6 +33,11 @@ WEEKLY_LEADERBOARD_DAY = 6              # 6 = Sunday
 # How often to check the feed for new results and fire reactions (minutes)
 POLL_INTERVAL_MINUTES = 5
 
+# Quiet hours — reactions are suppressed between these local times (scores still recorded).
+# Set both to the same value (e.g. "00:00") to disable quiet hours entirely.
+QUIET_HOURS_START = "23:00"
+QUIET_HOURS_END   = "07:00"
+
 # Number of players to show in weekly/monthly/yearly standings.
 # Players beyond this cutoff are not shown.
 # Set to 0 or None to show all eligible players.

@@ -108,6 +108,31 @@ cmd_backfill() {
     python3 routle_bot.py --backfill "$@"
 }
 
+cmd_rebuild_records() {
+    header "📊 Rebuilding records.json from scores.json"
+    check_config
+    ensure_venv
+    python3 routle_bot.py --rebuild-records
+}
+
+cmd_announce() {
+    header "📣 Posting announcement"
+    check_config
+    ensure_venv
+    # Usage: ./run_bot.sh announce "Your message here"
+    #        ./run_bot.sh announce --dry-run "Preview only"
+    DRY=""
+    if [[ "${1:-}" == "--dry-run" ]]; then
+        DRY="--dry-run"
+        shift
+    fi
+    if [[ -z "${1:-}" ]]; then
+        error "Usage: ./run_bot.sh announce [--dry-run] \"Your message\""
+        exit 1
+    fi
+    python3 routle_bot.py --announce "$1" $DRY
+}
+
 cmd_start() {
     header "🤖 Routle Bot — starting scheduler"
     check_config
@@ -179,29 +204,31 @@ cmd_install() {
 cmd_help() {
     echo -e "${BOLD}Usage:${RESET} ./run_bot.sh <command> [options]\n"
     echo -e "${BOLD}Commands:${RESET}"
-    printf "  ${CYAN}%-16s${RESET} %s\n" \
-        "run"        "Fetch results + post today's leaderboard (once)" \
-        "dry-run"    "Fetch results + print leaderboard (don't post)" \
-        "collect"    "Fetch & save results only, no leaderboard post" \
-        "backfill"   "Fire reactions for all results already in scores.json" \
-        "standings"   "Post an ad-hoc standings (weekly/monthly/yearly/custom)" \
-        "create-list" "Create the Routlers Bluesky list and print URI for config" \
-        "start"      "Start the daily scheduler in the background" \
-        "stop"       "Stop the background scheduler" \
-        "status"     "Show whether the bot is running + score stats" \
-        "logs"       "Tail the bot log (Ctrl+C to exit)" \
-        "install"    "Set up virtual environment + install dependencies" \
-        "help"       "Show this help message"
+    printf "  ${CYAN}%-18s${RESET} %s\n" \
+        "run"             "Fetch results + post today's leaderboard (once)" \
+        "dry-run"         "Fetch results + print leaderboard (don't post)" \
+        "collect"         "Fetch & save results only, no leaderboard post" \
+        "backfill"        "Fire reactions for all results already in scores.json" \
+        "standings"       "Post an ad-hoc standings (weekly/monthly/yearly/custom)" \
+        "create-list"     "Create the Routlers Bluesky list and print URI for config" \
+        "rebuild-records" "Recompute records.json from scratch using scores.json" \
+        "announce"        "Post a freeform message from the bot account" \
+        "start"           "Start the daily scheduler in the background" \
+        "stop"            "Stop the background scheduler" \
+        "status"          "Show whether the bot is running + score stats" \
+        "logs"            "Tail the bot log (Ctrl+C to exit)" \
+        "install"         "Set up virtual environment + install dependencies" \
+        "help"            "Show this help message"
     echo ""
     echo -e "${BOLD}Examples:${RESET}"
     echo "  ./run_bot.sh dry-run --period all              # Preview all leaderboards"
     echo "  ./run_bot.sh run --period weekly               # Post weekly leaderboard"
     echo "  ./run_bot.sh run --date 2026-04-07             # Post for a specific date"
+    echo "  ./run_bot.sh rebuild-records                   # Rebuild records.json"
+    echo "  ./run_bot.sh announce \"Bot back online!\"       # Post announcement"
+    echo "  ./run_bot.sh announce --dry-run \"Test message\" # Preview announcement"
     echo "  ./run_bot.sh start                             # Run on autopilot"
     echo "  ./run_bot.sh logs                              # Watch live output"
-    echo "  ./run_bot.sh run --date 2026-04-07    # Post for a specific date"
-    echo "  ./run_bot.sh start                    # Run on autopilot"
-    echo "  ./run_bot.sh logs                     # Watch live output"
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -209,18 +236,20 @@ COMMAND="${1:-help}"
 shift || true   # remove command from args so "$@" passes remaining flags
 
 case "$COMMAND" in
-    run)        cmd_run "$@" ;;
-    dry-run)    cmd_dry_run "$@" ;;
-    collect)    cmd_collect ;;
-    backfill)   cmd_backfill "$@" ;;
-    standings)   cmd_standings "$@" ;;
-    create-list) cmd_create_list ;;
-    start)      cmd_start ;;
-    stop)       cmd_stop ;;
-    status)     cmd_status ;;
-    logs)       cmd_logs ;;
-    install)    cmd_install ;;
-    help|--help|-h) cmd_help ;;
+    run)             cmd_run "$@" ;;
+    dry-run)         cmd_dry_run "$@" ;;
+    collect)         cmd_collect ;;
+    backfill)        cmd_backfill "$@" ;;
+    standings)       cmd_standings "$@" ;;
+    create-list)     cmd_create_list ;;
+    rebuild-records) cmd_rebuild_records ;;
+    announce)        cmd_announce "$@" ;;
+    start)           cmd_start ;;
+    stop)            cmd_stop ;;
+    status)          cmd_status ;;
+    logs)            cmd_logs ;;
+    install)         cmd_install ;;
+    help|--help|-h)  cmd_help ;;
     *)
         error "Unknown command: '$COMMAND'"
         echo ""
