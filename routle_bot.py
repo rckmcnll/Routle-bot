@@ -1260,10 +1260,15 @@ def _streak_suffix(current_streak: int, is_new_best: bool) -> str:
 
 def make_ace_post(handle: str, display_name: str, ace_count: int,
                   current_streak: int = 0, is_new_best: bool = False) -> str:
-    from config import ACE_MESSAGES
-    msg = random.choice(ACE_MESSAGES)
-    aces_line = _ace_count_line(ace_count)
-    text = msg.format(display_name=display_name, handle=handle, aces_line=aces_line)
+    if ace_count == 1:
+        from config import FIRST_ACE_MESSAGES
+        msg = random.choice(FIRST_ACE_MESSAGES)
+        text = msg.format(display_name=display_name, handle=handle)
+    else:
+        from config import ACE_MESSAGES
+        msg = random.choice(ACE_MESSAGES)
+        aces_line = _ace_count_line(ace_count)
+        text = msg.format(display_name=display_name, handle=handle, aces_line=aces_line)
     return text + _streak_suffix(current_streak, is_new_best)
 
 

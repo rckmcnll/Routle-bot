@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v5
+# 🚌 Routle Bot — v5.5
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
@@ -93,7 +93,7 @@ cd routle-bot
 ### 2. Configure
 
 ```bash
-cp config.example.py config.py
+cp config_example.py config.py
 ```
 
 Edit `config.py`. Required fields:
@@ -285,7 +285,8 @@ All reaction and milestone messages live at the bottom of `config.py`. Edit free
 
 | List | Fired when | Placeholders |
 |---|---|---|
-| `ACE_MESSAGES` | First-guess ace | `{display_name}`, `{handle}`, `{aces_line}` |
+| `FIRST_ACE_MESSAGES` | Player's very first ace (once, ever) | `{display_name}`, `{handle}` |
+| `ACE_MESSAGES` | Every subsequent ace | `{display_name}`, `{handle}`, `{aces_line}` |
 | `ACE_COUNT_LINES` | Appended to every ace message | `{aces}` |
 | `DNF_MESSAGES` | All guesses wrong | `{display_name}`, `{handle}` |
 | `SCORE_MESSAGES[2–5]` | Got it on guess 2–5 | `{display_name}`, `{handle}` |

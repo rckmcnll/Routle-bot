@@ -106,7 +106,11 @@ LOG_BACKUP_COUNT = 3           # Number of rotated backup files to keep (e.g. bo
 # ── Reaction messages ──────────────────────────────────────────────────────────
 # Edit these freely — they're posted as replies to players' score posts.
 #
-# ACE_MESSAGES     : posted when someone gets a first-guess ace (score = 1)
+# FIRST_ACE_MESSAGES : posted exactly once — the very first time a player gets an ace.
+#   Placeholders: {display_name}, {handle}
+#   No {aces_line} — this is their origin story, not a count update.
+#
+# ACE_MESSAGES     : posted on every subsequent ace (score = 1, ace_count > 1)
 #   Placeholders: {handle}    → the player's handle (with @)
 #                 {aces_line} → a randomly chosen ACE_COUNT_LINES entry
 #
@@ -115,6 +119,19 @@ LOG_BACKUP_COUNT = 3           # Number of rotated backup files to keep (e.g. bo
 #
 # DNF_MESSAGES     : posted when someone misses every stop (all 🟥)
 #   Placeholders: {handle} → the player's handle (with @)
+
+FIRST_ACE_MESSAGES = [
+    "🟩 FIRST ACE. {display_name} has entered the chat, taken one look at the route, and immediately left having already won. Welcome to the club. There are no membership cards. There is only knowing.",
+    "🎉 {display_name} — FIRST GUESS on their very first ace! Somewhere a TriMet driver is nodding slowly. They've seen this once before. In a dream.",
+    "🚌 Hold on. {display_name} just got their first ace. On the first guess. We need a moment. The herons at Oaks Bottom need a moment. Everyone take a breath.",
+    "⭐ A star is born. {display_name} has achieved their first first-guess ace and we are legally required to inform you that this changes everything. Congratulations. You are different now.",
+    "🗺️ {display_name} looked at the puzzle, knew the answer, typed the answer, and was correct. First ace. Their Portland brain has fully activated. There is no going back.",
+    "🚦 First ace for {display_name}! The traffic lights on Burnside turned green all the way down in their honor. TriMet is aware. They are pleased.",
+    "🌧️ {display_name} — first ace unlocked. You have been granted honorary knowledge of every bus schedule in the metro area. It will come to you in your dreams now. This is normal.",
+    "🎸 {display_name} just got their first ace and we're going to be honest with you: we didn't think this day would come so soon. We're not ready. The bot is not ready. Please hold.",
+    "🦦 FIRST ACE: {display_name}. The river otters on the Willamette have been notified. They are doing their little celebration float. You earned this.",
+    "🌹 {display_name} has cracked the code on their very first ace attempt. The roses in the Rose Garden are blooming slightly harder right now. Science cannot explain it.",
+]
 
 ACE_MESSAGES = [
     "🚲 FIRST GUESS?! {display_name} just rolled up on a fixie before anyone else even read the clue.\n\n  {aces_line}",
