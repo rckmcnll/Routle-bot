@@ -108,6 +108,10 @@ LOG_FILE         = "bot.log"   # Path to the rotating log file
 LOG_LEVEL        = "INFO"      # DEBUG | INFO | WARNING | ERROR
 LOG_BACKUP_COUNT = 3           # Number of rotated backup files to keep (e.g. bot.log.1 … .3)
 
+# ── Network ───────────────────────────────────────────────────────────────────
+API_TIMEOUT = 20   # Seconds before a Bluesky API request times out
+API_RETRIES = 3    # Attempts on transient errors (timeouts, connection resets) before giving up
+
 # ── Reaction messages ──────────────────────────────────────────────────────────
 # Edit these freely — they're posted as replies to players' score posts.
 #

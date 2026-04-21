@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v5.6
+# 🚌 Routle Bot — v5.7
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
@@ -249,6 +249,13 @@ help             Show help
 | `LOG_LEVEL` | `INFO` | Verbosity — `DEBUG`, `INFO`, `WARNING`, or `ERROR` |
 | `LOG_BACKUP_COUNT` | `3` | Rotated backups to keep (`bot.log.1` … `.N`). Each file is capped at 5 MB |
 
+### Network
+
+| Setting | Default | Description |
+|---|---|---|
+| `API_TIMEOUT` | `20` | Seconds before a Bluesky API request times out |
+| `API_RETRIES` | `3` | Attempts on transient errors before giving up. Uses exponential backoff (1s, 2s, 4s …) |
+
 ### DM commands
 
 Players can DM the bot handle with these keywords:
@@ -341,7 +348,8 @@ WantedBy=multi-user.target
 
 ## Reliability notes
 
-- **Retry logic** — each post is attempted up to 3 times before giving up
+- **Retry logic** — each post is attempted up to `API_RETRIES` times before giving up, with exponential backoff (1s, 2s, 4s …). All API calls — feed fetches, logins, DM sends — share the same retry wrapper, so transient timeouts and connection resets recover automatically rather than killing the poll cycle
+- **Configurable timeout** — `API_TIMEOUT` (default 20s) applies to every Bluesky API call. The previous 10s default was too tight for feed fetches returning up to 100 posts
 - **Read-confirm** — after posting, the bot polls `app.bsky.feed.getPosts` until the post is confirmed visible in the AppView before continuing
 - **Correct threading** — multi-page standings use `root` (always page 1) and `parent` (immediately preceding post) as required by the AT Protocol
 - **Atomic writes** — all JSON data files use write-then-rename to prevent corruption

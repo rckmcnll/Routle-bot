@@ -36,9 +36,11 @@ import config as _config
 LOG_FILE         = getattr(_config, "LOG_FILE",         "bot.log")
 LOG_LEVEL        = getattr(_config, "LOG_LEVEL",        "INFO")
 LOG_BACKUP_COUNT = getattr(_config, "LOG_BACKUP_COUNT", 3)
-RECORDS_FILE     = getattr(_config, "RECORDS_FILE",     "records.json")
+RECORDS_FILE      = getattr(_config, "RECORDS_FILE",      "records.json")
 QUIET_HOURS_START = getattr(_config, "QUIET_HOURS_START", "23:00")
 QUIET_HOURS_END   = getattr(_config, "QUIET_HOURS_END",   "07:00")
+API_TIMEOUT       = getattr(_config, "API_TIMEOUT",       20)    # seconds per request
+API_RETRIES       = getattr(_config, "API_RETRIES",       3)     # attempts on transient errors
 
 logger = logging.getLogger(__name__)
 
@@ -106,25 +108,63 @@ def _in_quiet_hours() -> bool:
 
 BASE_URL = "https://bsky.social/xrpc"
 
+# Transient errors that are safe to retry
+_RETRYABLE = (
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectTimeout,
+    requests.exceptions.ConnectionError,
+)
+
+
+def _api_request(method: str, url: str, **kwargs) -> requests.Response:
+    """
+    Wrapper around requests.get/post with retry + exponential backoff on
+    transient network errors (timeouts, connection resets).
+
+    Timeout defaults to API_TIMEOUT; retries to API_RETRIES.
+    Non-retryable HTTP errors (4xx/5xx) are raised immediately.
+    """
+    kwargs.setdefault("timeout", API_TIMEOUT)
+    last_exc: Exception | None = None
+    for attempt in range(1, API_RETRIES + 1):
+        try:
+            resp = requests.request(method, url, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except _RETRYABLE as exc:
+            last_exc = exc
+            if attempt < API_RETRIES:
+                delay = 2 ** (attempt - 1)   # 1s, 2s, 4s …
+                logger.warning(
+                    "Network error (attempt %d/%d): %s — retrying in %ds",
+                    attempt, API_RETRIES, exc, delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    "Network error after %d attempts: %s", API_RETRIES, exc
+                )
+        except requests.exceptions.HTTPError:
+            raise   # don't retry 4xx/5xx — propagate immediately
+    raise last_exc
+
 
 def login(handle: str, password: str) -> dict:
-    resp = requests.post(
+    resp = _api_request(
+        "POST",
         f"{BASE_URL}/com.atproto.server.createSession",
         json={"identifier": handle, "password": password},
-        timeout=10,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
 def resolve_did(handle: str, token: str) -> str:
-    resp = requests.get(
+    resp = _api_request(
+        "GET",
         f"{BASE_URL}/com.atproto.identity.resolveHandle",
         params={"handle": handle},
         headers={"Authorization": f"Bearer {token}"},
-        timeout=10,
     )
-    resp.raise_for_status()
     return resp.json()["did"]
 
 
@@ -140,13 +180,12 @@ def get_custom_feed(feed_uri: str, token: str, limit: int = 100) -> list:
         params = {"feed": feed_uri, "limit": min(limit - len(posts), 100)}
         if cursor:
             params["cursor"] = cursor
-        resp = requests.get(
+        resp = _api_request(
+            "GET",
             f"{BASE_URL}/app.bsky.feed.getFeed",
             params=params,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=10,
         )
-        resp.raise_for_status()
         data = resp.json()
         posts.extend(data.get("feed", []))
         if len(posts) >= limit or not data.get("cursor"):
@@ -175,7 +214,8 @@ def post_text(text: str, session: dict,
         parent = {"uri": reply_to["uri"], "cid": reply_to["cid"]}
         root   = {"uri": root_ref["uri"], "cid": root_ref["cid"]} if root_ref else parent
         record["reply"] = {"root": root, "parent": parent}
-    resp = requests.post(
+    resp = _api_request(
+        "POST",
         f"{BASE_URL}/com.atproto.repo.createRecord",
         json={
             "repo": session["did"],
@@ -183,9 +223,7 @@ def post_text(text: str, session: dict,
             "record": record,
         },
         headers={"Authorization": f"Bearer {session['accessJwt']}"},
-        timeout=10,
     )
-    resp.raise_for_status()
     return resp.json()
 
 
@@ -1561,16 +1599,19 @@ def _await_indexed(uri: str, token: str, timeout: int = 30, interval: float = 2.
     headers = {"Authorization": f"Bearer {token}"}
     while time.time() < deadline:
         try:
-            resp = requests.get(
+            resp = _api_request(
+                "GET",
                 f"{BASE_URL}/app.bsky.feed.getPosts",
                 params={"uris": uri},
                 headers=headers,
                 timeout=5,
             )
-            if resp.ok and resp.json().get("posts"):
+            if resp.json().get("posts"):
                 return True
-        except Exception:
-            pass
+        except _RETRYABLE as exc:
+            logger.debug("_await_indexed transient error: %s", exc)
+        except Exception as exc:
+            logger.debug("_await_indexed error: %s", exc)
         time.sleep(interval)
     return False
 
