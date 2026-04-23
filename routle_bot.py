@@ -1046,11 +1046,21 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                     "DM START anytime to opt back in. 🚌"
                 )
 
+        elif is_stop:
+            logger.debug("STOP from @%s (already opted out — no action needed)", sender_handle)
+            if not dry_run:
+                _send_dm("You're already opted out. DM START anytime to opt back in. 🚌")
+
         elif is_start and sender_handle in optouts:
             logger.info("✅ Opt-in received from @%s", sender_handle)
             optouts.discard(sender_handle)
             if not dry_run:
                 _send_dm("Welcome back! Routle bot replies are back on for you. 🟩")
+
+        elif is_start:
+            logger.debug("START from @%s (not opted out — no action needed)", sender_handle)
+            if not dry_run:
+                _send_dm("You're already receiving replies — no changes made. 🟩")
 
         elif is_stats:
             logger.info("📊 Stats request from @%s", sender_handle)
