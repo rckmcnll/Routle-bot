@@ -254,7 +254,36 @@ def create_list(session: dict, name: str, description: str = "") -> str:
     return resp.json()["uri"]
 
 
-def add_to_list(session: dict, list_uri: str, member_did: str) -> bool:
+def follow_player(session: dict, did: str) -> bool:
+    """
+    Follow a player DID from the bot account.
+    Returns True on success, False if already following or on error.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    try:
+        _api_request(
+            "POST",
+            f"{BASE_URL}/com.atproto.repo.createRecord",
+            json={
+                "repo": session["did"],
+                "collection": "app.bsky.graph.follow",
+                "record": {
+                    "$type": "app.bsky.graph.follow",
+                    "subject": did,
+                    "createdAt": now,
+                },
+            },
+            headers={"Authorization": f"Bearer {session['accessJwt']}"},
+        )
+        return True
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 400:
+            return False   # likely already following
+        logger.warning("Could not follow %s: %s", did, e)
+        return False
+    except Exception as e:
+        logger.warning("Could not follow %s: %s", did, e)
+        return False
     """Add a DID to a list. Returns True on success, False if already a member."""
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     try:
@@ -299,13 +328,21 @@ def save_known_players(known: dict):
 def maybe_add_to_routlers(session: dict, handle: str, did: str,
                            known: dict, optouts: set, dry_run: bool = False):
     """
-    Add a player to the Routlers list if they're new and haven't opted out.
-    Updates `known` in-place.
+    Follow the player and add them to the Routlers list if they're new.
+    Updates `known` in-place. Skips list add (but still follows) for opted-out players.
     """
-    if not ROUTLERS_LIST_URI:
-        return
     if handle in known:
         return
+
+    # Follow the player from the bot account
+    logger.info("➕ Following @%s", handle)
+    if not dry_run:
+        follow_player(session, did)
+
+    if not ROUTLERS_LIST_URI:
+        known[handle] = did
+        return
+
     if handle in optouts:
         logger.debug("Skipping list add — @%s opted out", handle)
         known[handle] = did   # still record as known so we don't check again
@@ -930,10 +967,12 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
 
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     """
-    Poll the bot's DM inbox for messages containing STOP, START, or STATS.
-    - STOP  : adds sender to optout list, sends confirmation DM.
-    - START : removes sender from optout list, sends welcome-back DM.
-    - STATS : sends sender a personal stats card DM.
+    Poll the bot's DM inbox for messages containing STOP, START, STATS, or HELP.
+    - STOP    : adds sender to optout list, sends confirmation DM.
+    - START   : removes sender from optout list, sends welcome-back DM.
+    - STATS   : sends sender a personal stats card DM.
+    - HELP    : sends sender the command list.
+    - unknown : sends a friendly "missed that" reply pointing to HELP.
     Returns list of newly opted-out handles.
     """
     token = session["accessJwt"]
@@ -974,11 +1013,9 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
         is_start = "START" in msg_text
         is_stats = msg_text == "STATS"   # exact match to avoid false positives
         is_help  = msg_text == "HELP"
+        is_known = is_stop or is_start or is_stats or is_help
 
-        if not is_stop and not is_start and not is_stats and not is_help:
-            continue
-
-        # Find the sender (the non-bot member)
+        # Find the sender (the non-bot member) — needed for all branches
         sender_handle = None
         for m in convo.get("members", []):
             if m.get("did") != bot_did:
@@ -1031,6 +1068,18 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
             logger.info("❓ Help request from @%s", sender_handle)
             if not dry_run:
                 _send_dm(
+                    f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
+                    "STATS — your personal stats card (games, avg, rank, streaks, aces)\n"
+                    "STOP  — turn off reply reactions\n"
+                    "START — turn reply reactions back on\n"
+                    "HELP  — show this message"
+                )
+
+        elif not is_known:
+            logger.info("❓ Unknown DM from @%s: %s", sender_handle, msg_text[:40])
+            if not dry_run:
+                _send_dm(
+                    "Sorry, I missed that while the driver was making an announcement. 🚌\n\n"
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
                     "STATS — your personal stats card (games, avg, rank, streaks, aces)\n"
                     "STOP  — turn off reply reactions\n"
