@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v5.7.1
+# 🚌 Routle Bot — v5
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
 
@@ -170,6 +170,7 @@ help             Show help
 ./run_bot.sh standings weekly
 ./run_bot.sh standings monthly
 ./run_bot.sh standings yearly
+./run_bot.sh standings participation
 
 # Custom date range
 ./run_bot.sh standings custom                               # all history to now
@@ -225,6 +226,7 @@ help             Show help
 | `adjusted` | Average across all days. Unplayed days count as DNF. | Monthly/yearly — balances skill and consistency |
 | `best_n` | Average of best `BEST_OF_N_DAYS` scores. Off days and absences forgiven. | Weekly — "your best 5 of 7 count" |
 | `weighted` | Inverted points × participation rate. | Smooth skill + attendance blend |
+| `participation` | Most days played. Ties broken by average score. | Celebrating consistency over skill |
 
 ### Storage & integrations
 

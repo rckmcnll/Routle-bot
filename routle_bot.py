@@ -470,11 +470,12 @@ def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) 
     method overrides RANKING_METHOD when provided (used for per-period config).
 
     Methods:
-      "total"    — raw total guesses (current behaviour, lower = better)
-      "avg"      — average guess with MIN_DAYS_THRESHOLD floor
-      "adjusted" — average over ALL days, treating unplayed days as DNF
-      "best_n"   — average of best BEST_OF_N_DAYS scores
-      "weighted" — inverted points × participation rate
+      "total"         — raw total guesses (current behaviour, lower = better)
+      "avg"           — average guess with MIN_DAYS_THRESHOLD floor
+      "adjusted"      — average over ALL days, treating unplayed days as DNF
+      "best_n"        — average of best BEST_OF_N_DAYS scores
+      "weighted"      — inverted points × participation rate
+      "participation" — most days played (ties broken by avg score)
     """
     total_days = len(date_keys)
     effective_method = method or RANKING_METHOD
@@ -518,6 +519,12 @@ def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) 
             weighted = round(pts * rate, 4)
             s["rank_key"]  = (-weighted, -days)       # higher weighted = better
             s["rank_stat"] = f"{pts}pts×{rate:.0%}"
+            s["eligible"]  = True
+
+        elif effective_method == "participation":
+            # Most days played; ties broken by avg score (lower = better)
+            s["rank_key"]  = (-days, round(s["avg"], 4))
+            s["rank_stat"] = f"{days}gp"
             s["eligible"]  = True
 
         else:  # "total" (default) or unrecognised
@@ -693,10 +700,11 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     shown_note  = f" (top {n_shown} of {total_players})" if total_players > n_shown else ""
     _eff = agg[next(iter(agg))].get("_method", RANKING_METHOD) if agg else RANKING_METHOD
     method_note = {
-        "avg":      f" · min {MIN_DAYS_THRESHOLD}d to qualify",
-        "adjusted": " · unplayed=DNF",
-        "best_n":   f" · best {BEST_OF_N_DAYS or active_days}/{active_days}d",
-        "weighted": " · pts×participation",
+        "avg":           f" · min {MIN_DAYS_THRESHOLD}d to qualify",
+        "adjusted":      " · unplayed=DNF",
+        "best_n":        f" · best {BEST_OF_N_DAYS or active_days}/{active_days}d",
+        "weighted":      " · pts×participation",
+        "participation": " · most games played",
     }.get(RANKING_METHOD, "")
     footer = (
         f"\n{total_players} player{'s' if total_players != 1 else ''}"
@@ -1865,7 +1873,7 @@ def run_standings(
     """
     Post an ad-hoc standings for any period or custom date range.
 
-    period    : "weekly" | "monthly" | "yearly" | "custom"
+    period    : "weekly" | "monthly" | "yearly" | "custom" | "participation"
     from_date : "YYYY-MM-DD" start of custom range (required if period="custom")
     to_date   : "YYYY-MM-DD" end of custom range (defaults to today if period="custom")
     """
@@ -1893,6 +1901,19 @@ def run_standings(
         label = f"Standings — {start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
         agg = scores_for_period(scores, date_keys)
         pages = format_period_leaderboard(label, agg, scores, date_keys, method=CUSTOM_RANKING_METHOD)
+    elif period == "participation":
+        # All-time participation — every date in scores.json
+        all_dates = sorted(scores.keys())
+        if not all_dates:
+            logger.error("No scores on record yet.")
+            return
+        start = datetime.date.fromisoformat(all_dates[0])
+        end   = datetime.date.fromisoformat(to_date) if to_date else today
+        delta = (end - start).days + 1
+        date_keys = [(start + datetime.timedelta(days=i)).isoformat() for i in range(delta)]
+        label = f"Participation Standings — {start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
+        agg = scores_for_period(scores, date_keys)
+        pages = format_period_leaderboard(label, agg, scores, date_keys, method="participation")
     elif period == "weekly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_weekly_leaderboard(ref, scores)
@@ -2021,7 +2042,7 @@ if __name__ == "__main__":
         help="Fire reactions for all results already in scores.json. Run once after initial collect.")
     parser.add_argument(
         "--standings",
-        choices=["weekly", "monthly", "yearly", "custom"],
+        choices=["weekly", "monthly", "yearly", "custom", "participation"],
         help="Post an ad-hoc standings. Use with --from / --to for custom ranges.",
     )
     parser.add_argument("--from", dest="from_date", help="Start date for custom standings (YYYY-MM-DD).")
