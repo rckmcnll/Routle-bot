@@ -63,6 +63,19 @@ Players DM `stats` to receive a personal stats card — games played, current an
 ### Routlers list
 Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded.
 
+### Fun standings
+Ad-hoc novelty categories posted on demand as a threaded reply chain. Run `./run_bot.sh standings fun` to post all categories with enough data, or name a specific category. Available categories:
+
+**Day of week** — `dow_monday` through `dow_sunday` — best avg score per player on that weekday.
+
+**Score counts** — `score_2` through `score_5` — most times a player scored that exact value.
+
+**Streaks** — `ace_streak` (longest consecutive ace run), `no_dnf_streak` (longest DNF-free run), `sub3_streak` (longest streak of scores under 3).
+
+**Yahtzee-style** — `yahtzee` (5 identical scores in a row), `four_kind` (4 identical in any 7-day window), `three_kind` (3 identical in any 5-day window), `full_house` (all values 1–5 in a week), `straight` (scored 1,2,3,4,5 in order across 5 consecutive days).
+
+**Comedy** — `dnf_royalty` (most DNFs, celebrated), `eternal_3` (most scores of exactly 3), `clutch_rate` (% of plays that were a guess-5 survival), `variance` (most chaotic scoring), `most_improved` (biggest avg drop from first 7 to last 7 games).
+
 ### Community records
 After each daily, weekly, and monthly leaderboard post, the bot checks whether any records were broken — most players in a single day, week, or month, and most new players joining in a single day. If a record falls, a reply is posted as a nested thread under the leaderboard announcing the new high. Previous record and date are included for context. Records are stored in `records.json` and accumulate automatically from first run.
 Multi-page standings use correct Bluesky thread structure (`root` always points to page 1, `parent` to the immediately preceding post). Each post is confirmed as indexed in the AppView before the next reply is posted. Failed posts are retried up to 3 times.
@@ -172,6 +185,13 @@ help             Show help
 ./run_bot.sh standings yearly
 ./run_bot.sh standings participation
 
+# Fun categories
+./run_bot.sh standings fun                    # all fun categories as a thread
+./run_bot.sh standings fun --dry-run          # preview
+./run_bot.sh standings dow_tuesday            # Tuesday standings only
+./run_bot.sh standings yahtzee                # Yahtzee Club only
+./run_bot.sh standings dnf_royalty            # DNF leaderboard only
+
 # Custom date range
 ./run_bot.sh standings custom                               # all history to now
 ./run_bot.sh standings custom --from 2026-04-01            # from date to now
@@ -201,6 +221,7 @@ help             Show help
 | `LEADERBOARD_TIME` | `21:00` | Time for daily leaderboard and period standings (24h local) |
 | `WEEKLY_LEADERBOARD_DAY` | `6` | Day of week for weekly standings (0=Mon … 6=Sun) |
 | `POLL_INTERVAL_MINUTES` | `5` | How often to check the feed for new results |
+| `FUN_STANDINGS_TIME` | `""` | Time to post a random fun category daily. Empty string disables. DOW categories only fire on their matching weekday. No repeat within 14 days |
 | `QUIET_HOURS_START` | `23:00` | Start of quiet window — reactions suppressed, scores still recorded |
 | `QUIET_HOURS_END` | `07:00` | End of quiet window. Overnight ranges (e.g. 23:00–07:00) work correctly. Set both to `00:00` to disable |
 
@@ -324,6 +345,7 @@ All files created automatically on first run. Safe to edit manually.
 | `known_players.json` | `{"handle": "did:plc:..."}` |
 | `dnf_counts.json` | `{"handle": total_dnf_count}` |
 | `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}}` |
+| `fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, used to enforce the 14-day no-repeat window |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 
