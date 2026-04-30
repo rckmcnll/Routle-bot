@@ -88,6 +88,9 @@ cmd_standings() {
     #   ./run_bot.sh standings weekly --dry-run
     #   ./run_bot.sh standings monthly
     #   ./run_bot.sh standings participation
+    #   ./run_bot.sh standings fun
+    #   ./run_bot.sh standings dow_tuesday
+    #   ./run_bot.sh standings yahtzee
     #   ./run_bot.sh standings custom --from 2026-04-01 --to 2026-04-09
     PERIOD="${1:-weekly}"; shift || true
     python3 routle_bot.py --standings "$PERIOD" "$@"
@@ -227,6 +230,10 @@ cmd_help() {
     echo "  ./run_bot.sh run --date 2026-04-07             # Post for a specific date"
     echo "  ./run_bot.sh standings weekly --dry-run        # Preview weekly standings"
     echo "  ./run_bot.sh standings participation           # Post participation standings"
+    echo "  ./run_bot.sh standings fun                     # Post all fun categories"
+    echo "  ./run_bot.sh standings fun --dry-run           # Preview fun standings"
+    echo "  ./run_bot.sh standings dow_tuesday             # Post Tuesday standings only"
+    echo "  ./run_bot.sh standings yahtzee                 # Post Yahtzee Club only"
     echo "  ./run_bot.sh rebuild-records                   # Rebuild records.json"
     echo "  ./run_bot.sh announce \"Bot back online!\"       # Post announcement"
     echo "  ./run_bot.sh announce --dry-run \"Test message\" # Preview announcement"

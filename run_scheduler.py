@@ -19,7 +19,10 @@ import time
 import datetime
 import logging
 from config import LEADERBOARD_TIME, WEEKLY_LEADERBOARD_DAY, POLL_INTERVAL_MINUTES
-from routle_bot import login, poll, run, BOT_HANDLE, BOT_PASSWORD, setup_logging
+from routle_bot import (
+    login, poll, run, BOT_HANDLE, BOT_PASSWORD, setup_logging,
+    load_scores, pick_fun_category, post_fun_category, FUN_STANDINGS_TIME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,17 @@ def _ref_date_for(period: str, now: datetime.datetime) -> str:
     return today.isoformat()
 
 
+def _should_fire_fun(now: datetime.datetime, last_fired: dict) -> bool:
+    """True if the fun standings should fire right now (once per day at FUN_STANDINGS_TIME)."""
+    if _hhmm(now) != FUN_STANDINGS_TIME:
+        return False
+    key = f"fun_{now.strftime('%Y-%m-%d')}"
+    if last_fired.get("fun") == key:
+        return False
+    last_fired["fun"] = key
+    return True
+
+
 # ─── Main loop ─────────────────────────────────────────────────────────────────
 
 def main():
@@ -83,6 +97,10 @@ def main():
                 LEADERBOARD_TIME)
     logger.info("   Monthly leaderboard → 1st of each month at %s (posts previous month)", LEADERBOARD_TIME)
     logger.info("   Yearly leaderboard  → Jan 1st at %s (posts previous year)", LEADERBOARD_TIME)
+    if FUN_STANDINGS_TIME:
+        logger.info("   Fun standings      → daily at %s (random category, no repeat within 14d)", FUN_STANDINGS_TIME)
+    else:
+        logger.info("   Fun standings      → disabled (set FUN_STANDINGS_TIME in config to enable)")
 
     session = login(BOT_HANDLE, BOT_PASSWORD)
     logger.info("✓ Logged in as @%s", BOT_HANDLE)
@@ -122,6 +140,17 @@ def main():
                     run(post_date=ref, period=period)
                 except Exception:
                     logger.exception("%s leaderboard failed:", period)
+
+        # ── Fire random fun standings on schedule ──────────────────────────────
+        if FUN_STANDINGS_TIME and _should_fire_fun(now, last_leaderboard_fired):
+            try:
+                scores = load_scores()
+                chosen = pick_fun_category(now, scores)
+                if chosen:
+                    logger.info("🎲 Posting fun standings: %s", chosen)
+                    post_fun_category(chosen, scores, session)
+            except Exception:
+                logger.exception("Fun standings failed:")
 
         time.sleep(TICK_SECONDS)
 

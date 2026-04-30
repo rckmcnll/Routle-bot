@@ -38,6 +38,9 @@ POLL_INTERVAL_MINUTES = 5
 QUIET_HOURS_START = "23:00"
 QUIET_HOURS_END   = "07:00"
 
+# Fun standings — one random category posted at this time each day (set to "" to disable)
+FUN_STANDINGS_TIME = "14:00"
+
 # Number of players to show in weekly/monthly/yearly standings.
 # Players beyond this cutoff are not shown.
 # Set to 0 or None to show all eligible players.
