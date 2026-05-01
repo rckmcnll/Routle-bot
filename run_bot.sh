@@ -119,6 +119,21 @@ cmd_rebuild_records() {
     python3 routle_bot.py --rebuild-records
 }
 
+cmd_fun() {
+    header "🎲 Routle Bot — random fun report"
+    check_config
+    ensure_venv
+    # Pick and post a random fun category (ignores 14-day repeat filter)
+    # Usage:
+    #   ./run_bot.sh fun            # pick and post
+    #   ./run_bot.sh fun --dry-run  # pick and preview without posting
+    DRY=""
+    if [[ "${1:-}" == "--dry-run" ]]; then
+        DRY="--dry-run"
+    fi
+    python3 routle_bot.py --fun $DRY
+}
+
 cmd_announce() {
     header "📣 Posting announcement"
     check_config
@@ -216,6 +231,7 @@ cmd_help() {
         "standings"       "Post an ad-hoc standings (weekly/monthly/yearly/custom)" \
         "create-list"     "Create the Routlers Bluesky list and print URI for config" \
         "rebuild-records" "Recompute records.json from scratch using scores.json" \
+        "fun"             "Pick and post a random fun report (--dry-run to preview)" \
         "announce"        "Post a freeform message from the bot account" \
         "start"           "Start the daily scheduler in the background" \
         "stop"            "Stop the background scheduler" \
@@ -234,7 +250,8 @@ cmd_help() {
     echo "  ./run_bot.sh standings fun --dry-run           # Preview fun standings"
     echo "  ./run_bot.sh standings dow_tuesday             # Post Tuesday standings only"
     echo "  ./run_bot.sh standings yahtzee                 # Post Yahtzee Club only"
-    echo "  ./run_bot.sh rebuild-records                   # Rebuild records.json"
+    echo "  ./run_bot.sh fun                               # Post random fun report"
+    echo "  ./run_bot.sh fun --dry-run                    # Preview random fun report"
     echo "  ./run_bot.sh announce \"Bot back online!\"       # Post announcement"
     echo "  ./run_bot.sh announce --dry-run \"Test message\" # Preview announcement"
     echo "  ./run_bot.sh start                             # Run on autopilot"
@@ -254,6 +271,7 @@ case "$COMMAND" in
     create-list)     cmd_create_list ;;
     rebuild-records) cmd_rebuild_records ;;
     announce)        cmd_announce "$@" ;;
+    fun)             cmd_fun "$@" ;;
     start)           cmd_start ;;
     stop)            cmd_stop ;;
     status)          cmd_status ;;

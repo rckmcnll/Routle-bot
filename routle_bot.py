@@ -36,11 +36,13 @@ import config as _config
 LOG_FILE         = getattr(_config, "LOG_FILE",         "bot.log")
 LOG_LEVEL        = getattr(_config, "LOG_LEVEL",        "INFO")
 LOG_BACKUP_COUNT = getattr(_config, "LOG_BACKUP_COUNT", 3)
-RECORDS_FILE      = getattr(_config, "RECORDS_FILE",      "records.json")
-QUIET_HOURS_START = getattr(_config, "QUIET_HOURS_START", "23:00")
-QUIET_HOURS_END   = getattr(_config, "QUIET_HOURS_END",   "07:00")
-API_TIMEOUT       = getattr(_config, "API_TIMEOUT",       20)    # seconds per request
-API_RETRIES       = getattr(_config, "API_RETRIES",       3)     # attempts on transient errors
+RECORDS_FILE       = getattr(_config, "RECORDS_FILE",       "records.json")
+QUIET_HOURS_START  = getattr(_config, "QUIET_HOURS_START",  "23:00")
+QUIET_HOURS_END    = getattr(_config, "QUIET_HOURS_END",    "07:00")
+API_TIMEOUT        = getattr(_config, "API_TIMEOUT",        20)
+API_RETRIES        = getattr(_config, "API_RETRIES",        3)
+FUN_STANDINGS_TIME = getattr(_config, "FUN_STANDINGS_TIME", "")    # "" = disabled
+FUN_HISTORY_FILE   = getattr(_config, "FUN_HISTORY_FILE",   "fun_history.json")
 
 logger = logging.getLogger(__name__)
 
@@ -617,11 +619,28 @@ def _graphemes(s: str) -> int:
     return len(s)
 
 
-def format_daily_leaderboard(date_str: str, day_scores: dict) -> str:
+def format_daily_leaderboard(date_str: str, day_scores: dict,
+                             scores: dict | None = None) -> str:
     if not day_scores:
         return f"No {GAME_NAME} results for {date_str} yet!"
 
-    ranked = sorted(day_scores.items(), key=lambda x: (x[1], x[0]))
+    # Compute all-time avg per player for tiebreaking (lower = better)
+    # Only uses scores from before or on the current date to avoid lookahead
+    def _alltime_avg(handle: str) -> float:
+        if not scores:
+            return 0.0
+        all_sc = [
+            scores[d][handle]
+            for d in scores
+            if handle in scores[d] and d <= date_str
+        ]
+        non_dnf = [s for s in all_sc if s != DNF]
+        return round(sum(non_dnf) / len(non_dnf), 4) if non_dnf else 9.0
+
+    ranked = sorted(
+        day_scores.items(),
+        key=lambda x: (x[1], _alltime_avg(x[0]), x[0]),
+    )
     date_display = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%B %-d, %Y")
     header = f"🏆 {GAME_NAME} Daily — {date_display}\n"
 
@@ -812,7 +831,514 @@ def format_yearly_leaderboard(ref: datetime.date, scores: dict) -> list[str]:
     return format_period_leaderboard(label, scores_for_period(scores, keys), scores, keys, method=YEARLY_RANKING_METHOD)
 
 
-# ─── Ace tracking ─────────────────────────────────────────────────────────────
+# ─── Fun standings ─────────────────────────────────────────────────────────────
+
+def _player_dated_scores(scores: dict) -> dict[str, list[tuple[str, int]]]:
+    """Return {handle: [(date_str, score), ...]} sorted by date for all players."""
+    result: dict[str, list] = {}
+    for date_str in sorted(scores.keys()):
+        for handle, score in scores[date_str].items():
+            result.setdefault(handle, []).append((date_str, score))
+    return result
+
+
+def _fun_page(title: str, rows: list[tuple[str, str]], emoji: str = "🎲",
+              description: str | None = None) -> list[str]:
+    """
+    Format a fun standings into Bluesky-sized pages.
+    rows: [(rank_label, handle_short, stat_str), ...]
+    If description is provided it is appended as a final reply page.
+    """
+    header = f"{emoji} {GAME_NAME} {title}\n"
+    player_rows = []
+    for rank_label, handle_short, stat in rows:
+        rank_w  = max(len(r[0]) for r in rows)
+        name_w  = max(len(r[1]) for r in rows)
+        player_rows.append(
+            f"{_mono(f'{rank_label:>{rank_w}}')} {_mono(f'{handle_short:<{name_w}}')}  {_mono(stat)}"
+        )
+
+    pages = []
+    remaining = list(player_rows)
+    page_num = 0
+    while remaining:
+        chunk = []
+        while remaining:
+            candidate = (
+                (header if page_num == 0 else f"({page_num + 1}) {GAME_NAME} {title} cont.\n")
+                + "\n" + "\n".join(chunk + [remaining[0]])
+            )
+            if _graphemes(candidate) <= BSKY_LIMIT:
+                chunk.append(remaining.pop(0))
+            else:
+                break
+        if not chunk:
+            chunk = [remaining.pop(0)]
+        hdr = header if page_num == 0 else f"({page_num + 1}) {GAME_NAME} {title} cont.\n"
+        pages.append(hdr + "\n" + "\n".join(chunk))
+        page_num += 1
+
+    if not pages:
+        pages = [header + "\nNo data yet!"]
+
+    if description:
+        pages.append(description)
+
+    return pages
+
+
+def _rank_rows(items: list[tuple[str, int | float]], fmt: str = "{}",
+               higher_is_better: bool = True,
+               player_dates: dict[str, str] | None = None) -> list[tuple[str, str, str]]:
+    """
+    Given [(handle, value), ...] produce ranked (rank_label, short_handle, stat_str) rows.
+    Ties share the same rank label.
+    If player_dates is provided, the most recent date is appended to each row's stat.
+    """
+    if not items:
+        return []
+    items = sorted(items, key=lambda x: -x[1] if higher_is_better else x[1])
+    rows = []
+    prev_val = None
+    rank = 0
+    for i, (handle, val) in enumerate(items):
+        if val != prev_val:
+            rank = i + 1
+            prev_val = val
+        stat = fmt.format(val)
+        if player_dates and handle in player_dates:
+            last = player_dates[handle]
+            last_fmt = datetime.datetime.strptime(last, "%Y-%m-%d").strftime("%-m/%-d")
+            stat = f"{stat} {last_fmt}"
+        rows.append((f"{rank}.", _short_handle(handle), stat))
+    return rows
+
+
+def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str, str]]]:
+    """
+    Compute all fun category stats from scores.json.
+    Returns a tuple of:
+      - stats:      {category_key: [(handle, value), ...]} unsorted
+      - last_dates: {yahtzee_category_key: {handle: "YYYY-MM-DD"}} most recent date achieved
+    """
+    dated = _player_dated_scores(scores)
+    stats: dict[str, dict[str, int | float]] = {
+        # Day-of-week bests (avg score on that day, lower = better → stored as negative)
+        "dow_monday":    {}, "dow_tuesday":  {}, "dow_wednesday": {},
+        "dow_thursday":  {}, "dow_friday":   {}, "dow_saturday":  {},
+        "dow_sunday":    {},
+        # Score count categories
+        "score_2": {}, "score_3": {}, "score_4": {}, "score_5": {},
+        # Streak & pattern
+        "ace_streak": {}, "no_dnf_streak": {}, "sub3_streak": {}, "struggle_streak": {},
+        # Yahtzee
+        "yahtzee": {}, "four_kind": {}, "three_kind": {},
+        "full_house": {}, "straight": {},
+        # Comedy
+        "dnf_royalty": {}, "eternal_3": {},
+        "clutch_rate": {}, "variance": {},
+        "most_improved": {},
+        # Derived
+        "full_card": {},
+    }
+
+    # Tracks the most recent date each yahtzee category was achieved per player
+    last_dates: dict[str, dict[str, str]] = {
+        "yahtzee": {}, "four_kind": {}, "three_kind": {},
+        "full_house": {}, "straight": {},
+    }
+
+    # ── Day-of-week accumulation ───────────────────────────────────────────────
+    dow_names = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    dow_acc: dict[str, dict[str, list[int]]] = {d: {} for d in dow_names}
+    for handle, dated_scores in dated.items():
+        for date_str, score in dated_scores:
+            dow = datetime.date.fromisoformat(date_str).strftime("%A").lower()
+            dow_acc[dow].setdefault(handle, []).append(score)
+
+    for dow in dow_names:
+        key = f"dow_{dow}"
+        for handle, sc_list in dow_acc[dow].items():
+            non_dnf = [s for s in sc_list if s != DNF]
+            if non_dnf:
+                stats[key][handle] = round(sum(non_dnf) / len(non_dnf), 2)
+
+    # ── Score count categories (2–5) ───────────────────────────────────────────
+    for handle, dated_scores in dated.items():
+        sc_list = [s for _, s in dated_scores]
+        for val in (2, 3, 4, 5):
+            cnt = sc_list.count(val)
+            if cnt:
+                stats[f"score_{val}"][handle] = cnt
+
+    # ── Streaks ────────────────────────────────────────────────────────────────
+    def _max_streak(dated_scores: list[tuple[str, int]], pred) -> int:
+        best = cur = 0
+        for _, s in dated_scores:
+            if pred(s):
+                cur += 1
+                best = max(best, cur)
+            else:
+                cur = 0
+        return best
+
+    for handle, dated_scores in dated.items():
+        ace_s    = _max_streak(dated_scores, lambda s: s == 1)
+        no_dnf   = _max_streak(dated_scores, lambda s: s != DNF)
+        sub3     = _max_streak(dated_scores, lambda s: s < 3)
+        struggle = _max_streak(dated_scores, lambda s: s >= 4)
+        if ace_s    >= 3: stats["ace_streak"][handle]      = ace_s
+        if no_dnf   >= 3: stats["no_dnf_streak"][handle]   = no_dnf
+        if sub3     >= 3: stats["sub3_streak"][handle]      = sub3
+        if struggle >= 3: stats["struggle_streak"][handle]  = struggle
+
+    # ── Yahtzee-style ──────────────────────────────────────────────────────────
+    for handle, dated_scores in dated.items():
+        sc_list = [s for _, s in dated_scores]
+        n = len(sc_list)
+
+        def _is_consecutive(dated_scores: list, start: int, length: int) -> bool:
+            """True if the `length` entries starting at `start` span consecutive calendar dates."""
+            for j in range(start, start + length - 1):
+                d1 = datetime.date.fromisoformat(dated_scores[j][0])
+                d2 = datetime.date.fromisoformat(dated_scores[j + 1][0])
+                if (d2 - d1).days != 1:
+                    return False
+            return True
+
+        # Yahtzee — 5 identical scores on 5 consecutive calendar days (DNFs excluded)
+        # Non-overlapping: once a Yahtzee is found, advance past the full window
+        yahtzee = 0
+        yahtzee_last = ""
+        i = 0
+        while i <= n - 5:
+            if _is_consecutive(dated_scores, i, 5):
+                window = sc_list[i:i+5]
+                if DNF not in window and len(set(window)) == 1:
+                    yahtzee += 1
+                    yahtzee_last = dated_scores[i + 4][0]
+                    i += 5   # skip past this window — no overlapping Yahtzees
+                    continue
+            i += 1
+        if yahtzee:
+            stats["yahtzee"][handle] = yahtzee
+            last_dates["yahtzee"][handle] = yahtzee_last
+
+        # Four of a kind — 4 identical scores on 4 consecutive calendar days (DNFs excluded)
+        # Non-overlapping: skip past the window on a hit.
+        four = 0
+        four_last = ""
+        four_consumed: set[int] = set()   # start indices consumed by four_kind
+        i = 0
+        while i <= n - 4:
+            if _is_consecutive(dated_scores, i, 4):
+                window = sc_list[i:i+4]
+                if DNF not in window and len(set(window)) == 1:
+                    four += 1
+                    four_last = dated_scores[i + 3][0]
+                    for j in range(i, i + 4):
+                        four_consumed.add(j)
+                    i += 4   # skip past this window
+                    continue
+            i += 1
+        if four:
+            stats["four_kind"][handle] = four
+            last_dates["four_kind"][handle] = four_last
+
+        # Three of a kind — 3 identical scores on 3 consecutive calendar days (DNFs excluded)
+        # Non-overlapping, and windows already consumed by four_kind are excluded.
+        three = 0
+        three_last = ""
+        i = 0
+        while i <= n - 3:
+            # Skip any index that's inside a four_kind window
+            if i in four_consumed:
+                i += 1
+                continue
+            if _is_consecutive(dated_scores, i, 3):
+                window = sc_list[i:i+3]
+                if DNF not in window and len(set(window)) == 1:
+                    three += 1
+                    three_last = dated_scores[i + 2][0]
+                    i += 3   # skip past this window
+                    continue
+            i += 1
+        if three:
+            stats["three_kind"][handle] = three
+            last_dates["three_kind"][handle] = three_last
+
+        # Full house — all 5 score values (1–5) in any order across 5 consecutive calendar days (DNFs excluded)
+        # Non-overlapping: skip past the window on a hit.
+        full = 0
+        full_last = ""
+        i = 0
+        while i <= n - 5:
+            if _is_consecutive(dated_scores, i, 5):
+                window = sc_list[i:i+5]
+                if DNF not in window and all(v in window for v in range(1, MAX_SQUARES + 1)):
+                    full += 1
+                    full_last = dated_scores[i + 4][0]
+                    i += 5   # skip past this window
+                    continue
+            i += 1
+        if full:
+            stats["full_house"][handle] = full
+            last_dates["full_house"][handle] = full_last
+
+        # Straight — all 5 values (1–5) in any order across 5 consecutive calendar days
+        # Non-overlapping: skip past the window on a hit. DNF implicitly excluded (sorted != [1-5]).
+        straight = 0
+        straight_last = ""
+        i = 0
+        while i <= n - 5:
+            if _is_consecutive(dated_scores, i, 5):
+                window = sc_list[i:i+5]
+                if sorted(window) == list(range(1, MAX_SQUARES + 1)):
+                    straight += 1
+                    straight_last = dated_scores[i + 4][0]
+                    i += 5   # skip past this window
+                    continue
+            i += 1
+        if straight:
+            stats["straight"][handle] = straight
+            last_dates["straight"][handle] = straight_last
+
+    # ── Comedy ────────────────────────────────────────────────────────────────
+    for handle, dated_scores in dated.items():
+        sc_list = [s for _, s in dated_scores]
+        non_dnf = [s for s in sc_list if s != DNF]
+
+        dnf_cnt = sc_list.count(DNF)
+        if dnf_cnt:
+            stats["dnf_royalty"][handle] = dnf_cnt
+
+        eternal = sc_list.count(3)
+        if eternal:
+            stats["eternal_3"][handle] = eternal
+
+        # Clutch rate — % of plays that were exactly guess 5
+        if len(sc_list) >= 3:
+            clutch = round(sc_list.count(5) / len(sc_list) * 100, 1)
+            if clutch > 0:
+                stats["clutch_rate"][handle] = clutch
+
+        # Variance — how chaotic is their scoring (higher = more dramatic)
+        if len(non_dnf) >= 3:
+            mean = sum(non_dnf) / len(non_dnf)
+            var  = round(sum((x - mean) ** 2 for x in non_dnf) / len(non_dnf), 3)
+            if var > 0:
+                stats["variance"][handle] = var
+
+        # Most improved — avg of last 7 games vs first 7 (need at least 14)
+        if len(non_dnf) >= 14:
+            first7 = non_dnf[:7]
+            last7  = non_dnf[-7:]
+            improvement = round(sum(first7)/7 - sum(last7)/7, 2)
+            if improvement > 0:
+                stats["most_improved"][handle] = improvement
+
+    # ── Full card — players who have achieved all 5 Yahtzee categories ────────
+    # Value = total count of all five category occurrences combined (more = more dominant)
+    # Only players with at least 1 of each of the 5 categories qualify.
+    _yahtzee_cats = ("yahtzee", "four_kind", "three_kind", "full_house", "straight")
+    all_handles = {h for cat in _yahtzee_cats for h in stats[cat]}
+    for handle in all_handles:
+        if all(handle in stats[cat] for cat in _yahtzee_cats):
+            total_hits = sum(stats[cat][handle] for cat in _yahtzee_cats)
+            stats["full_card"][handle] = total_hits
+            # Last date = most recent across all five categories
+            cat_dates = [
+                last_dates[cat][handle]
+                for cat in _yahtzee_cats
+                if handle in last_dates.get(cat, {})
+            ]
+            if cat_dates:
+                last_dates.setdefault("full_card", {})[handle] = max(cat_dates)
+
+    return (
+        {k: list(v.items()) for k, v in stats.items()},
+        last_dates,
+    )
+
+
+# Fun category metadata: (title, emoji, higher_is_better, format_string, min_value, description)
+_FUN_CATEGORIES: dict[str, tuple] = {
+    # Day of week (lower avg = better, so higher_is_better=False)
+    "dow_monday":    ("Monday Standings",    "📅", False, "⌀{}",  0,
+        "📅 Monday methodology: who scores best when the week is brand new and full of terrible promise. Ranked by average score, DNFs not counted. Bus schedule not consulted."),
+    "dow_tuesday":   ("Tuesday Standings",   "📅", False, "⌀{}",  0,
+        "📅 Tuesday methodology: the most overlooked day of the week deserves its own leaderboard. Ranked by average score. Tuesday did nothing wrong."),
+    "dow_wednesday": ("Wednesday Standings", "📅", False, "⌀{}",  0,
+        "📅 Wednesday methodology: hump day Routle performance, ranked by average score. The week is half over. So is your patience. Shine anyway."),
+    "dow_thursday":  ("Thursday Standings",  "📅", False, "⌀{}",  0,
+        "📅 Thursday methodology: so close to Friday. Ranked by average score. The MAX runs on Thursdays. So do you."),
+    "dow_friday":    ("Friday Standings",    "📅", False, "⌀{}",  0,
+        "📅 Friday methodology: end-of-week Routle energy, ranked by average score. Whether you're celebrating or commiserating, the 14 still runs."),
+    "dow_saturday":  ("Saturday Standings",  "📅", False, "⌀{}",  0,
+        "📅 Saturday methodology: weekend warrior edition. Average score on Saturdays only. The Saturday bus runs less often. Your focus does not."),
+    "dow_sunday":    ("Sunday Standings",    "📅", False, "⌀{}",  0,
+        "📅 Sunday methodology: the day of rest, ranked by who rests least. Average Sunday score. The weekly leaderboard resets at midnight. This does not."),
+    # Score counts
+    "score_2":       ("Most Guess-2s",       "🟨", True,  "{}×2", 1,
+        "🟨 Methodology: total all-time count of scores that were exactly 2 guesses. Got it on the second try. Confident. Controlled. Not quite an ace but we see you."),
+    "score_3":       ("Most Guess-3s",       "🟧", True,  "{}×3", 1,
+        "🟧 Methodology: total count of scores that were exactly 3 guesses. The Switzerland of Routle scores — not too proud, not too ashamed, perfectly reasonable."),
+    "score_4":       ("Most Guess-4s",       "🟥", True,  "{}×4", 1,
+        "🟥 Methodology: total count of scores that were exactly 4 guesses. You were sweating a little. The route did not make it easy. You made it anyway."),
+    "score_5":       ("Most Guess-5s",       "💀", True,  "{}×5", 1,
+        "💀 Methodology: total count of scores that were exactly 5 guesses — the last-stop survival. One guess left. Pure adrenaline. Ranked by how many times you lived to tell it."),
+    # Streaks
+    "ace_streak":    ("Longest Ace Streak",  "⭐", True,  "{}d",  1,
+        "⭐ Methodology: longest unbroken run of consecutive days with a first-guess ace. Miss a day, the streak ends. Like a bus that didn't wait."),
+    "no_dnf_streak": ("Longest No-DNF Streak","🛡️", True, "{}d",  1,
+        "🛡️ Methodology: longest stretch of consecutive days played without a single DNF. Any score 1–5 keeps it alive. A DNF breaks it. The route breaks no one twice."),
+    "sub3_streak":      ("Longest Sub-3 Streak","🔥", True,  "{}d",  1,
+        "🔥 Methodology: longest run of consecutive days where every score was 1 or 2 guesses. Ruthless consistency. The express service of Routle performance."),
+    "struggle_streak":  ("Longest Struggle Bus Streak", "🚌", True, "{}d", 1,
+        "🚌 Methodology: longest run of consecutive days scoring 4, 5, or DNF. The route was not cooperating. Neither was the schedule. You rode it anyway. Every. Single. Day."),
+    # Yahtzee
+    "yahtzee":       ("Yahtzee Club",        "🎲", True,  "{}×",  1,
+        "🎲 Methodology: five identical scores on five consecutive calendar days. No DNFs. No gaps. Counted by occurrences. If you've done this once, you are built different. If you've done it twice — are you okay?"),
+    "four_kind":     ("Four of a Kind",      "🎲", True,  "{}×",  1,
+        "🎲 Methodology: four identical scores on four consecutive calendar days. No DNFs. A remarkable pattern that the route probably did not intend."),
+    "three_kind":    ("Three of a Kind",     "🎲", True,  "{}×",  1,
+        "🎲 Methodology: three identical scores on three consecutive calendar days. No DNFs. A coincidence the first time. A lifestyle after that."),
+    "full_house":    ("Full House",          "🎲", True,  "{}×",  1,
+        "🎲 Methodology: all five score values (1–5) in any order across five consecutive calendar days. No DNFs. A complete emotional journey in one work week."),
+    "straight":      ("The Straight",        "🎲", True,  "{}×",  1,
+        "🎲 Methodology: scores of 1, 2, 3, 4, and 5 — all five values, any order — across five consecutive calendar days. No DNFs. A perfectly balanced week, as all things should be."),
+    "full_card":     ("Full Scorecard Club", "🎊", True,  "{}pts", 1,
+        "🎊 Methodology: players who have achieved at least one of every Yahtzee category (Three of a Kind, Four of a Kind, Full House, Straight, and Yahtzee). Ranked by total combined hits across all five. This is an extremely short list. Probably."),
+    # Comedy
+    "dnf_royalty":   ("DNF Royalty 👑",      "💀", True,  "{}✗",  1,
+        "💀 Methodology: all-time total DNFs, ranked highest to lowest and celebrated not shamed. The route is hard. You showed up anyway. Every single time. That's actually kind of heroic."),
+    "eternal_3":     ("The Eternal 3",       "🟧", True,  "{}×3", 1,
+        "🟧 Methodology: total all-time scores of exactly 3 guesses. A 3 is the bus arriving right on schedule — technically fine, spiritually neutral. Ranked by how many times you achieved this perfect mediocrity."),
+    "clutch_rate":   ("Clutch Rate",         "😬", True,  "{}%",  0,
+        "😬 Methodology: percentage of all plays that were exactly a guess-5 — the one-stop-left survival. Minimum 3 games to qualify. The higher your clutch rate, the more dramatic your commute."),
+    "variance":      ("Most Dramatic",       "🎭", True,  "σ²={}", 0,
+        "🎭 Methodology: score variance across all non-DNF plays. Higher variance means wilder swings between great days and bad ones. This is not a criticism. Portland runs on chaos and so do you."),
+    "most_improved": ("Most Improved",       "📈", True,  "+{}⌀", 0,
+        "📈 Methodology: average of first 7 non-DNF games vs last 7 non-DNF games. Requires at least 14 games. The bigger the drop, the more you've levelled up. The route didn't get easier. You got better."),
+}
+
+
+def format_fun_standings(category: str, scores: dict) -> list[str]:
+    """Format a single fun standings category as Bluesky-sized pages."""
+    if category not in _FUN_CATEGORIES:
+        return [f"Unknown fun category: {category}"]
+
+    title, emoji, higher, fmt, _, desc = _FUN_CATEGORIES[category]
+    all_stats, last_dates = compute_fun_stats(scores)
+    items = all_stats.get(category, [])
+
+    if not items:
+        return [f"{emoji} {GAME_NAME} {title}\n\nNo data yet — keep playing!"]
+
+    player_dates = last_dates.get(category) if category in last_dates else None
+    rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
+    return _fun_page(title, rows, emoji=emoji, description=desc)
+
+
+def format_fun_all(scores: dict, categories: list[str] | None = None) -> dict[str, list[str]]:
+    """
+    Format all (or a subset of) fun categories.
+    Returns {category_key: [page1, page2, ...]} for each category with data.
+    """
+    cats = categories or list(_FUN_CATEGORIES.keys())
+    all_stats, last_dates = compute_fun_stats(scores)
+    result = {}
+    for cat in cats:
+        if cat not in _FUN_CATEGORIES:
+            continue
+        title, emoji, higher, fmt, min_val, desc = _FUN_CATEGORIES[cat]
+        items = [(h, v) for h, v in all_stats.get(cat, []) if v > min_val]
+        if not items:
+            continue
+        player_dates = last_dates.get(cat) if cat in last_dates else None
+        rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
+        result[cat] = _fun_page(title, rows, emoji=emoji, description=desc)
+    return result
+
+
+# ── Fun history (no-repeat tracking) ──────────────────────────────────────────
+
+def load_fun_history() -> dict:
+    """Load fun post history. Structure: {"category": "YYYY-MM-DD", ...}"""
+    if os.path.exists(FUN_HISTORY_FILE):
+        with open(FUN_HISTORY_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_fun_history(history: dict) -> None:
+    _tmp = FUN_HISTORY_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(history, f, indent=2, sort_keys=True)
+    os.replace(_tmp, FUN_HISTORY_FILE)
+
+
+# Day-of-week categories keyed by Python weekday() index (0=Mon … 6=Sun)
+_DOW_BY_WEEKDAY = {
+    0: "dow_monday", 1: "dow_tuesday", 2: "dow_wednesday",
+    3: "dow_thursday", 4: "dow_friday", 5: "dow_saturday", 6: "dow_sunday",
+}
+
+
+def pick_fun_category(now: datetime.datetime, scores: dict) -> str | None:
+    """
+    Pick a random fun category to post, subject to:
+      - Must have data (at least one player with a qualifying value)
+      - Has not been posted within the last 14 days
+      - DOW categories only eligible on their matching day of the week
+
+    Returns the category key, or None if nothing is eligible.
+    """
+    history = load_fun_history()
+    cutoff  = (now.date() - datetime.timedelta(days=14)).isoformat()
+    today_dow = now.weekday()   # 0=Mon … 6=Sun
+
+    # Build eligible pool
+    all_stats, _ = compute_fun_stats(scores)
+    eligible  = []
+
+    for cat, (title, emoji, higher, fmt, min_val, desc) in _FUN_CATEGORIES.items():
+        # Skip if no data
+        items = [(h, v) for h, v in all_stats.get(cat, []) if v > min_val]
+        if not items:
+            continue
+
+        # DOW categories only on their matching weekday
+        if cat.startswith("dow_"):
+            if _DOW_BY_WEEKDAY.get(today_dow) != cat:
+                continue
+
+        # Skip if posted within the last 14 days
+        last_posted = history.get(cat, "")
+        if last_posted and last_posted > cutoff:
+            continue
+
+        eligible.append(cat)
+
+    if not eligible:
+        logger.info("No eligible fun categories today (all recently posted or no data).")
+        return None
+
+    chosen = random.choice(eligible)
+    logger.info("🎲 Picked fun category: %s (eligible pool: %d)", chosen, len(eligible))
+    return chosen
+
+
+def post_fun_category(chosen: str, scores: dict, session: dict,
+                      dry_run: bool = False) -> None:
+    """Post a fun category and record it in fun_history.json."""
+    pages = format_fun_standings(chosen, scores)
+    _post_standings(chosen, pages, session, dry_run, pin=False)
+    if not dry_run:
+        history = load_fun_history()
+        history[chosen] = datetime.date.today().isoformat()
+        save_fun_history(history)
+        logger.info("Recorded %s in fun history.", chosen)
 
 def load_aces() -> dict:
     """Load ace counts. Structure: {"handle": int}"""
@@ -897,6 +1423,109 @@ def save_optouts(optouts: set):
     os.replace(_tmp, OPTOUTS_FILE)
 
 
+def format_player_yahtzee(handle: str, scores: dict) -> str:
+    """
+    Build a personal Yahtzee scorecard DM.
+    Shows each of the five Yahtzee categories with a die face emoji,
+    the player's count, most recent date achieved (or — if not yet achieved),
+    and a special bonus message if they have unlocked all five categories.
+    """
+    all_stats, last_dates = compute_fun_stats(scores)
+    short = _short_handle(handle)
+
+    # (die_face, category_key, label)
+    scorecard = [
+        ("⚀", "three_kind", "Three of a Kind"),
+        ("⚁", "four_kind",  "Four of a Kind"),
+        ("⚂", "full_house", "Full House"),
+        ("⚃", "straight",   "The Straight"),
+        ("⚄", "yahtzee",    "Yahtzee!"),
+    ]
+
+    lines = [f"🎲 {GAME_NAME} Yahtzee Card — @{_mono(short)}", ""]
+
+    achieved = []
+    for die, cat, label in scorecard:
+        player_val = dict(all_stats.get(cat, [])).get(handle)
+        if player_val:
+            count = _mono(str(int(player_val))) + "×"
+            last  = last_dates.get(cat, {}).get(handle, "")
+            if last:
+                last_fmt = datetime.datetime.strptime(last, "%Y-%m-%d").strftime("%-m/%-d")
+                stat = f"{count} (last {last_fmt})"
+            else:
+                stat = count
+            achieved.append(cat)
+        else:
+            stat = "—"
+        lines.append(f"{die} {label}: {stat}")
+
+    lines.append("")
+    total = len(achieved)
+
+    if total == 5:
+        # Full scorecard — special reward
+        lines.append("🎊 FULL SCORECARD! You've hit every category.")
+        lines.append("You are the dice. The dice are you. 🚌🎲")
+    elif total == 0:
+        lines.append("No categories yet — keep rolling! 🎲")
+    else:
+        remaining = 5 - total
+        lines.append(f"{total}/5 categories unlocked. {remaining} to go!")
+
+    return "\n".join(lines)
+
+
+def format_player_history(handle: str, scores: dict) -> str:
+    """
+    Build a this-year score history DM for a player.
+    One row per day played, grouped by month, with a score glyph.
+    """
+    year = datetime.date.today().year
+    year_prefix = str(year)
+
+    glyphs = {1: "🟩", 2: "🟨", 3: "🟧", 4: "🟥", 5: "💀", DNF: "❌"}
+
+    # Gather this year's scores sorted by date
+    days = sorted(
+        ((d, scores[d][handle]) for d in scores if d.startswith(year_prefix) and handle in scores[d]),
+        key=lambda x: x[0],
+    )
+
+    short = _short_handle(handle)
+    if not days:
+        return f"📅 No {GAME_NAME} scores for @{short} in {year} yet!"
+
+    lines = [f"📅 {GAME_NAME} history {year} — @{_mono(short)}", ""]
+
+    current_month = None
+    for date_str, score in days:
+        month = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%B")
+        if month != current_month:
+            if current_month is not None:
+                lines.append("")
+            lines.append(f"── {month} ──")
+            current_month = month
+        day_num = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%-d")
+        glyph   = glyphs.get(score, "❓")
+        score_display = "DNF" if score == DNF else str(score)
+        lines.append(f"{glyph} {_mono(day_num.rjust(2))}  {score_display}")
+
+    # Summary line
+    non_dnf = [s for _, s in days if s != DNF]
+    dnf_cnt = sum(1 for _, s in days if s == DNF)
+    avg     = round(sum(non_dnf) / len(non_dnf), 2) if non_dnf else None
+    lines.append("")
+    summary = f"{len(days)} games played"
+    if avg is not None:
+        summary += f"  ·  ⌀{avg} (excl. DNFs)"
+    if dnf_cnt:
+        summary += f"  ·  {dnf_cnt} DNF{'s' if dnf_cnt != 1 else ''}"
+    lines.append(summary)
+
+    return "\n".join(lines)
+
+
 def format_player_stats(handle: str, scores: dict, aces: dict,
                         streaks: dict, dnf_counts: dict) -> str:
     """
@@ -975,12 +1604,14 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
 
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     """
-    Poll the bot's DM inbox for messages containing STOP, START, STATS, or HELP.
-    - STOP    : adds sender to optout list, sends confirmation DM.
-    - START   : removes sender from optout list, sends welcome-back DM.
-    - STATS   : sends sender a personal stats card DM.
-    - HELP    : sends sender the command list.
-    - unknown : sends a friendly "missed that" reply pointing to HELP.
+    Poll the bot's DM inbox for messages containing STOP, START, STATS, HELP, YAHTZEE, HISTORY, or HIST.
+    - STOP          : adds sender to optout list, sends confirmation DM.
+    - START         : removes sender from optout list, sends welcome-back DM.
+    - STATS         : sends sender a personal stats card DM.
+    - YAHTZEE       : sends sender their personal Yahtzee scorecard DM.
+    - HISTORY/HIST  : sends sender their score history for the current year.
+    - HELP          : sends sender the command list.
+    - unknown       : sends a friendly "missed that" reply pointing to HELP.
     Returns list of newly opted-out handles.
     """
     token = session["accessJwt"]
@@ -1017,11 +1648,13 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
 
         msg_text = last_msg.get("text", "").strip().upper()
 
-        is_stop  = "STOP"  in msg_text
-        is_start = "START" in msg_text
-        is_stats = msg_text == "STATS"   # exact match to avoid false positives
-        is_help  = msg_text == "HELP"
-        is_known = is_stop or is_start or is_stats or is_help
+        is_stop    = "STOP"    in msg_text
+        is_start   = "START"   in msg_text
+        is_stats   = msg_text == "STATS"
+        is_help    = msg_text == "HELP"
+        is_yahtzee = msg_text == "YAHTZEE"
+        is_history = msg_text in ("HISTORY", "HIST")
+        is_known   = is_stop or is_start or is_stats or is_help or is_yahtzee or is_history
 
         # Find the sender (the non-bot member) — needed for all branches
         sender_handle = None
@@ -1082,15 +1715,29 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                 )
                 _send_dm(stats_msg)
 
+        elif is_yahtzee:
+            logger.info("🎲 Yahtzee card request from @%s", sender_handle)
+            if not dry_run:
+                scores = load_scores()
+                _send_dm(format_player_yahtzee(sender_handle, scores))
+
+        elif is_history:
+            logger.info("📅 History request from @%s", sender_handle)
+            if not dry_run:
+                scores = load_scores()
+                _send_dm(format_player_history(sender_handle, scores))
+
         elif is_help:
             logger.info("❓ Help request from @%s", sender_handle)
             if not dry_run:
                 _send_dm(
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
-                    "STATS — your personal stats card (games, avg, rank, streaks, aces)\n"
-                    "STOP  — turn off reply reactions\n"
-                    "START — turn reply reactions back on\n"
-                    "HELP  — show this message"
+                    "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
+                    "HIST    — your score history for this year\n"
+                    "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
+                    "STOP    — turn off reply reactions\n"
+                    "START   — turn reply reactions back on\n"
+                    "HELP    — show this message"
                 )
 
         elif not is_known:
@@ -1099,10 +1746,12 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                 _send_dm(
                     "Sorry, I missed that while the driver was making an announcement. 🚌\n\n"
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
-                    "STATS — your personal stats card (games, avg, rank, streaks, aces)\n"
-                    "STOP  — turn off reply reactions\n"
-                    "START — turn reply reactions back on\n"
-                    "HELP  — show this message"
+                    "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
+                    "HIST    — your score history for this year\n"
+                    "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
+                    "STOP    — turn off reply reactions\n"
+                    "START   — turn reply reactions back on\n"
+                    "HELP    — show this message"
                 )
 
     save_optouts(optouts)
@@ -1740,7 +2389,7 @@ def run(
     if period in ("daily", "all"):
         daily_ref = _post_and_print(
             "Daily",
-            format_daily_leaderboard(ref.isoformat(), scores.get(ref.isoformat(), {})),
+            format_daily_leaderboard(ref.isoformat(), scores.get(ref.isoformat(), {}), scores),
             session, dry_run,
         )
         # Check for community records and post as a nested reply if any were broken
@@ -1914,15 +2563,42 @@ def run_standings(
         label = f"Participation Standings — {start.strftime('%b %-d')} to {end.strftime('%b %-d, %Y')}"
         agg = scores_for_period(scores, date_keys)
         pages = format_period_leaderboard(label, agg, scores, date_keys, method="participation")
-    elif period == "weekly":
-        ref = datetime.date.fromisoformat(to_date) if to_date else today
-        pages = format_weekly_leaderboard(ref, scores)
+    elif period == "fun":
+        # Post all fun categories that have data as a thread
+        cat_filter = from_date.split(",") if from_date else None   # --from reused as comma-separated category list
+        fun_pages = format_fun_all(scores, categories=cat_filter)
+        if not fun_pages:
+            logger.info("No fun stats available yet — keep playing!")
+            return
+        # Post each category's pages as its own mini-thread, all chained together
+        root_ref = None
+        prev_ref = None
+        for cat, pages in fun_pages.items():
+            for i, page in enumerate(pages):
+                is_first = (root_ref is None)
+                result = _post_and_print(
+                    f"Fun — {cat}",
+                    page,
+                    session,
+                    dry_run,
+                    reply_to=prev_ref,
+                    root_ref=root_ref,
+                    pin=is_first,
+                )
+                if is_first:
+                    root_ref = result
+                prev_ref = result
+        return
     elif period == "monthly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_monthly_leaderboard(ref, scores)
     elif period == "yearly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_yearly_leaderboard(ref, scores)
+    elif period in _FUN_CATEGORIES:
+        pages = format_fun_standings(period, scores)
+        _post_standings(period, pages, session, dry_run, pin=False)
+        return
     else:
         logger.error("Unknown period: %s", period)
         return
@@ -2042,7 +2718,8 @@ if __name__ == "__main__":
         help="Fire reactions for all results already in scores.json. Run once after initial collect.")
     parser.add_argument(
         "--standings",
-        choices=["weekly", "monthly", "yearly", "custom", "participation"],
+        choices=["weekly", "monthly", "yearly", "custom", "participation", "fun"]
+                + list(_FUN_CATEGORIES.keys()),
         help="Post an ad-hoc standings. Use with --from / --to for custom ranges.",
     )
     parser.add_argument("--from", dest="from_date", help="Start date for custom standings (YYYY-MM-DD).")
@@ -2051,6 +2728,8 @@ if __name__ == "__main__":
         help="Recompute records.json from scratch using scores.json.")
     parser.add_argument("--announce", metavar="TEXT",
         help="Post a freeform announcement from the bot account.")
+    parser.add_argument("--fun", action="store_true",
+        help="Pick a random fun category and post it (ignores 14-day repeat filter).")
     args = parser.parse_args()
     setup_logging(dry_run=args.dry_run)
 
@@ -2058,6 +2737,22 @@ if __name__ == "__main__":
         rebuild_records()
     elif args.announce:
         announce(args.announce, dry_run=args.dry_run)
+    elif args.fun:
+        session = login(BOT_HANDLE, BOT_PASSWORD)
+        scores  = load_scores()
+        # Pick ignoring history so CLI always gets a result
+        all_stats, _ = compute_fun_stats(scores)
+        eligible = [
+            cat for cat, (title, emoji, higher, fmt, min_val, desc)
+            in _FUN_CATEGORIES.items()
+            if [(h, v) for h, v in all_stats.get(cat, []) if v > min_val]
+        ]
+        if not eligible:
+            logger.error("No fun categories have data yet.")
+        else:
+            chosen = random.choice(eligible)
+            logger.info("🎲 Randomly picked: %s", chosen)
+            post_fun_category(chosen, scores, session, dry_run=args.dry_run)
     elif args.create_list:
         session = login(BOT_HANDLE, BOT_PASSWORD)
         uri = create_list(

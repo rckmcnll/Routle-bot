@@ -288,6 +288,8 @@ Players can DM the bot handle with these keywords:
 | `stop` | Stop receiving reply reactions. Still appears in leaderboards. |
 | `start` | Re-enable reply reactions. |
 | `stats` | Receive a personal stats card (see below). |
+| `hist` or `history` | Receive your score history for the current year, grouped by month. |
+| `yahtzee` | Receive a personal Yahtzee scorecard (see below). |
 | `help` | Receive a list of all available DM commands. |
 
 #### Stats card
@@ -310,6 +312,24 @@ Sending `stats` triggers a DM reply with a full personal breakdown:
 ```
 
 Stats are drawn from all data files and work regardless of opt-out status.
+
+#### Yahtzee card
+
+Sending `yahtzee` triggers a DM with the player's personal Yahtzee scorecard across the five Yahtzee-style categories, each shown with a die face emoji:
+
+```
+🎲 Routle Yahtzee Card — @busonly
+
+⚀ Three of a Kind: 𝟺×
+⚁ Four of a Kind: 𝟷×
+⚂ Full House: —
+⚃ The Straight: —
+⚄ Yahtzee!: —
+
+3/5 categories unlocked. 2 to go!
+```
+
+If a player has unlocked all five categories they receive a special full scorecard message.
 
 ---
 
