@@ -940,6 +940,8 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         "most_improved": {},
         # Derived
         "full_card": {},
+        "part_time": {},
+        "the_regulars": {},
     }
 
     # Tracks the most recent date each yahtzee category was achieved per player
@@ -1155,6 +1157,28 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
             if cat_dates:
                 last_dates.setdefault("full_card", {})[handle] = max(cat_dates)
 
+    # ── Part-time — players averaging 1–4 games/week over last 28 days ────────
+    # 28 days = 4 complete weeks. avg_per_week = games_in_window / 4.
+    # Ranked by avg_per_week descending (most consistent part-timer wins).
+    cutoff_28 = (datetime.date.today() - datetime.timedelta(days=28)).isoformat()
+    all_handles_28 = {h for d in scores if d > cutoff_28 for h in scores[d]}
+    for handle in all_handles_28:
+        games_in_window = sum(
+            1 for d in scores if d > cutoff_28 and handle in scores[d]
+        )
+        avg_per_week = round(games_in_window / 4, 2)
+        if 1 <= avg_per_week <= 3:
+            stats["part_time"][handle] = avg_per_week
+
+    # ── The Regulars — players averaging 4+ games/week over last 28 days ──────
+    for handle in all_handles_28:
+        games_in_window = sum(
+            1 for d in scores if d > cutoff_28 and handle in scores[d]
+        )
+        avg_per_week = round(games_in_window / 4, 2)
+        if avg_per_week >= 4:
+            stats["the_regulars"][handle] = avg_per_week
+
     return (
         {k: list(v.items()) for k, v in stats.items()},
         last_dates,
@@ -1209,6 +1233,10 @@ _FUN_CATEGORIES: dict[str, tuple] = {
         "🎲 Methodology: scores of 1, 2, 3, 4, and 5 — all five values, any order — across five consecutive calendar days. No DNFs. A perfectly balanced week, as all things should be."),
     "full_card":     ("Full Scorecard Club", "🎊", True,  "{}pts", 1,
         "🎊 Methodology: players who have achieved at least one of every Yahtzee category (Three of a Kind, Four of a Kind, Full House, Straight, and Yahtzee). Ranked by total combined hits across all five. This is an extremely short list. Probably."),
+    "part_time":     ("Part-Time Commuters",  "🎟️", True,  "⌀{}gp/wk", 0,
+        "🎟️ Methodology: players averaging between 1 and 3 games per week over the last 28 days — less than half the week. Not every day, but reliably there. The bus doesn't need to know your full schedule. It just needs to see you sometimes."),
+    "the_regulars":  ("The Regulars",         "🚍", True,  "⌀{}gp/wk", 0,
+        "🚍 Methodology: players averaging 4 or more games per week over the last 28 days. You know the route. You know the driver. You have a preferred seat. The bus would notice if you were gone."),
     # Comedy
     "dnf_royalty":   ("DNF Royalty 👑",      "💀", True,  "{}✗",  1,
         "💀 Methodology: all-time total DNFs, ranked highest to lowest and celebrated not shamed. The route is hard. You showed up anyway. Every single time. That's actually kind of heroic."),
