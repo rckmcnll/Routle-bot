@@ -1,6 +1,6 @@
-# 🚌 Routle Bot — v5
+# 🚌 Routle Bot — v6
 
-A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, and lets players opt out via DM.
+A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, follows new players, and supports a full suite of player DM commands.
 
 Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxroutl.bsky.social). Easily adaptable to any Routle city or similar game.
 
@@ -9,76 +9,80 @@ Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxrou
 ## Features
 
 ### Daily leaderboard
-Posted every day at a configured time. Shows each player's emoji result grid, rank, and a score distribution histogram. Handles Bluesky's 300-character limit — long player lists trim with `…and N more`.
+Posted every day at a configured time. Shows each player's emoji result grid, rank, and a score distribution histogram. Tied players are broken by all-time average score. Handles Bluesky's 300-character limit — long player lists split across continuation posts automatically.
 
 ```
 🏆 Routle Daily — April 9, 2026
 
-🟩⬛⬛⬛⬛ 🥇 @busonly
-🟩⬛⬛⬛⬛ 🥇 @willowashmaple
-🟥🟩⬛⬛⬛ 🥉 @rockom
-🟥🟥🟥🟩⬛ 4. @drmitchpdx
+🟩⬛⬛⬛⬛ 1. @𝚋𝚞𝚜𝚘𝚗𝚕𝚢
+🟩⬛⬛⬛⬛ 1. @𝚠𝚒𝚕𝚕𝚘𝚠𝚊𝚜𝚑𝚖𝚊𝚙𝚕𝚎
+🟥🟩⬛⬛⬛ 9. @𝚛𝚘𝚌𝚔𝚘𝚖
 
-10 players today!
+12 players today!
 
-  1▸ ███████ 7
+  1▸ ███████ 8
   2▸ █ 1
-  4▸ █ 1
   5▸ █ 1
+  ✗▸ █ 2
 ```
 
 ### Period standings (weekly / monthly / yearly)
-Posted on a schedule as correctly threaded reply chains. Uses short handles and aligned columns. Long standings split across multiple posts automatically. Uses configurable ranking methods per period.
+Posted on a schedule as correctly threaded reply chains. Uses Unicode Mathematical Monospace formatting with figure-space padding for aligned columns. Long standings split across multiple posts automatically. Uses configurable ranking methods per period.
 
 ```
-🏆 Routle Weekly Standings — Apr 7–13, 2026
-
-🥇 busonly          ⌀1.40 (b5)  7/7d ⭐
-🥈 willowashmaple   ⌀1.80 (b5)  7/7d ⭐
-🥉 rockom           ⌀2.20 (b5)  6/7d
-4. drmitchpdx        ⌀3.60 (b5)  7/7d 1✗
-
-7 players · 7/7 days played · best 5/7d
+𝟷. 𝚖𝚒𝚌𝚔𝚓𝚙𝚐         ⌀𝟷.𝟶𝟶 (𝚋𝟻)  𝟽/𝟽𝚍 ⭐
+𝟷. 𝚠𝚒𝚕𝚕𝚘𝚠𝚊𝚜𝚑𝚖𝚊𝚙𝚕𝚎  ⌀𝟷.𝟶𝟶 (𝚋𝟻)  𝟼/𝟽𝚍 ⭐
+𝟹. 𝚔𝚑𝚛𝚒𝚜𝚜𝚘𝚍𝚎𝚗      ⌀𝟷.𝟶𝟶 (𝚋𝟸)  𝟸/𝟽𝚍 ⭐
+𝟷𝟶. 𝚋𝚞𝚜𝚘𝚗𝚕𝚢        ⌀𝟷.𝟸𝟶 (𝚋𝟻)  𝟼/𝟽𝚍 ⭐
 ```
 
 ### Reactions
 The bot replies to each player's score post with Portland-flavored commentary:
-- **Guess 1 (ace)** — celebratory message with all-time ace count
+- **First ace ever** — special one-time celebratory message from `FIRST_ACE_MESSAGES`
+- **Subsequent aces** — celebratory message with all-time ace count
 - **Guesses 2–5** — score-appropriate commentary
 - **DNF** — commiseration
 - **Streaks** — 🔥 suffix for consecutive days, new personal bests called out
 
+Reactions are suppressed during configurable quiet hours. Opted-out players still appear in leaderboards.
+
 ### Milestones
-Separate additional reply when a player hits:
-- **Ace milestones** — at 5, 10, 25, 50, 100, 200, 500
+Separate additional reply when a player hits configurable thresholds:
+- **Ace milestones** — at 5, 10, 25, 50, 100, 200, 500 (and every 100 thereafter)
 - **Games played milestones** — at 3, 7, 25, 50, 100, 200, 300, 365
 - **DNF milestones** — every 5 DNFs (celebrating persistence)
 
-### Opt-out via DM
-Players DM `stop` to the bot handle to stop receiving reply reactions. DM `start` to re-enable. Opted-out players still appear in leaderboards and standings.
-
-### Personal stats via DM
-Players DM `stats` to receive a personal stats card — games played, current and best streaks, aces, DNFs, average score, and a score distribution histogram. Works for all players regardless of opt-out status.
-
-### Routlers list
-Automatically adds every new player to a Bluesky curated list. Opted-out players are excluded.
+### Auto-follow
+The bot follows each new player from the bot account on their first result, and adds them to the Routlers curated list (opt-outs excluded from list but still followed).
 
 ### Fun standings
-Ad-hoc novelty categories posted on demand as a threaded reply chain. Run `./run_bot.sh standings fun` to post all categories with enough data, or name a specific category. Available categories:
+Ad-hoc novelty categories posted on demand as a threaded reply chain, each with a description post appended. A random category can also be scheduled daily. Available categories:
 
 **Day of week** — `dow_monday` through `dow_sunday` — best avg score per player on that weekday.
 
 **Score counts** — `score_2` through `score_5` — most times a player scored that exact value.
 
-**Streaks** — `ace_streak` (longest consecutive ace run), `no_dnf_streak` (longest DNF-free run), `sub3_streak` (longest streak of scores under 3).
+**Streaks** (minimum 3 consecutive days) — `ace_streak`, `no_dnf_streak`, `sub3_streak` (scores 1–2), `struggle_streak` (scores 4–5 or DNF).
 
-**Yahtzee-style** — `yahtzee` (5 identical scores in a row), `four_kind` (4 identical in any 7-day window), `three_kind` (3 identical in any 5-day window), `full_house` (all values 1–5 in a week), `straight` (scored 1,2,3,4,5 in order across 5 consecutive days).
+**Yahtzee-style** (all require consecutive calendar days, no DNFs except Straight which is implicitly DNF-safe):
+- `three_kind` — 3 identical scores on 3 consecutive days
+- `four_kind` — 4 identical scores on 4 consecutive days (four-of-a-kind windows excluded from three-of-a-kind count)
+- `full_house` — all 5 score values (1–5) across 5 consecutive days
+- `straight` — scores 1, 2, 3, 4, 5 in any order across 5 consecutive days
+- `yahtzee` — 5 identical scores on 5 consecutive days
+- `full_card` — players who have achieved at least one of every Yahtzee category, ranked by total combined hits
 
-**Comedy** — `dnf_royalty` (most DNFs, celebrated), `eternal_3` (most scores of exactly 3), `clutch_rate` (% of plays that were a guess-5 survival), `variance` (most chaotic scoring), `most_improved` (biggest avg drop from first 7 to last 7 games).
+All Yahtzee categories use non-overlapping windows (10 consecutive aces = 2 Yahtzees).
+
+**Comedy** — `dnf_royalty` (most DNFs, celebrated), `eternal_3` (most scores of exactly 3), `clutch_rate` (% of plays that were guess-5), `variance` (most chaotic scoring), `most_improved` (biggest avg drop from first 7 to last 7 games).
+
+Each fun standings post ends with a light, Portland-flavored description of the methodology.
 
 ### Community records
-After each daily, weekly, and monthly leaderboard post, the bot checks whether any records were broken — most players in a single day, week, or month, and most new players joining in a single day. If a record falls, a reply is posted as a nested thread under the leaderboard announcing the new high. Previous record and date are included for context. Records are stored in `records.json` and accumulate automatically from first run.
-Multi-page standings use correct Bluesky thread structure (`root` always points to page 1, `parent` to the immediately preceding post). Each post is confirmed as indexed in the AppView before the next reply is posted. Failed posts are retried up to 3 times.
+After each daily, weekly, and monthly leaderboard, the bot checks for new records across daily/weekly/monthly player counts, per-score daily highs (most aces, 2s, 3s, 4s, 5s, or DNFs in a day), and most new players in a day. Records are posted as a nested reply under the leaderboard when broken.
+
+### Reliable threaded posting
+Multi-page standings use correct Bluesky thread structure (`root` always points to page 1, `parent` to the immediately preceding post). Each post is confirmed as indexed in the AppView before the next reply is posted. Failed posts are retried up to `API_RETRIES` times.
 
 ### Feed polling
 Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence.
@@ -133,13 +137,14 @@ Copy the printed URI into `config.py` as `ROUTLERS_LIST_URI`.
 ```bash
 ./run_bot.sh dry-run
 ./run_bot.sh standings weekly --dry-run
-./run_bot.sh standings custom --dry-run   # all history to now
+./run_bot.sh fun --dry-run
 ```
 
 ### 5. First run — import history and backfill reactions
 
 ```bash
 ./run_bot.sh collect              # import existing results silently
+./run_bot.sh rebuild-records      # build records.json from scores.json
 ./run_bot.sh backfill --dry-run   # preview what reactions would fire
 ./run_bot.sh backfill             # fire reactions for existing results
 ```
@@ -162,6 +167,7 @@ collect          Fetch & save results only, no leaderboard or reactions
 standings        Post an ad-hoc standings (see examples below)
 backfill         Fire reactions for all results already in scores.json
 rebuild-records  Recompute records.json from scratch using scores.json
+fun              Pick and post a random fun report (--dry-run to preview)
 announce         Post a freeform message from the bot account
 start            Start the scheduler in the background
 stop             Stop the background scheduler
@@ -190,7 +196,13 @@ help             Show help
 ./run_bot.sh standings fun --dry-run          # preview
 ./run_bot.sh standings dow_tuesday            # Tuesday standings only
 ./run_bot.sh standings yahtzee                # Yahtzee Club only
+./run_bot.sh standings full_card              # Full Scorecard Club
+./run_bot.sh standings struggle_streak        # Struggle Bus Streak
 ./run_bot.sh standings dnf_royalty            # DNF leaderboard only
+
+# Random fun report
+./run_bot.sh fun                              # pick and post
+./run_bot.sh fun --dry-run                    # pick and preview
 
 # Custom date range
 ./run_bot.sh standings custom                               # all history to now
@@ -262,7 +274,8 @@ help             Show help
 | `OPTOUTS_FILE` | `optouts.json` | Opted-out handles |
 | `KNOWN_PLAYERS_FILE` | `known_players.json` | Players added to Routlers list |
 | `DNF_COUNTS_FILE` | `dnf_counts.json` | All-time DNF counts |
-| `RECORDS_FILE` | `records.json` | Community records (player count highs, new player highs) |
+| `RECORDS_FILE` | `records.json` | Community records (player count highs, per-score highs) |
+| `FUN_HISTORY_FILE` | `fun_history.json` | Last posted date per fun category (14-day repeat guard) |
 
 ### Logging
 
@@ -292,44 +305,60 @@ Players can DM the bot handle with these keywords:
 | `yahtzee` | Receive a personal Yahtzee scorecard (see below). |
 | `help` | Receive a list of all available DM commands. |
 
+Unknown DMs receive a friendly driver-announcement reply with the full command list embedded.
+
 #### Stats card
 
-Sending `stats` triggers a DM reply with a full personal breakdown:
+Sending `stats` triggers a DM with a full personal breakdown — games, streaks, aces, DNFs, average score (excl. DNFs), all-time rank, and a score distribution histogram.
 
 ```
-📊 Routle stats — @busonly
+📊 Routle stats — @𝚋𝚞𝚜𝚘𝚗𝚕𝚢
 
-🎮 47 games  🔥 streak 5d  (best 12d)
-⭐ 8 aces  💀 3 DNFs
-⌀ avg 2.38  ·  best 1
+🎮 𝟺𝟽 games  🔥 streak 𝟻d  (best 𝟷𝟸d)
+⭐ 𝟾 aces  💀 𝟹 DNFs
+⌀ avg 𝟸.𝟹𝟾  ·  best 𝟷  (excl. DNFs)  ·  rank 𝟹 of 𝟸𝟺
 
-1▸ ████ 8
-2▸ ████████ 16
-3▸ ███████ 15
-4▸ ██ 5
-5▸ 0
-✗▸ 3
+𝟷▸ ████ 𝟾
+𝟸▸ ████████ 𝟷𝟼
+𝟹▸ ███████ 𝟷𝟻
+𝟺▸ ██ 𝟻
+𝟻▸ 𝟶
+✗▸ 𝟹
 ```
 
-Stats are drawn from all data files and work regardless of opt-out status.
+#### History card
+
+Sending `hist` or `history` triggers a DM with all scores for the current year, grouped by month:
+
+```
+📅 Routle history 2026 — @𝚛𝚘𝚌𝚔𝚘𝚖
+
+── April ──
+❌  𝟾  DNF
+💀  𝟿  5
+🟧 𝟷𝟶  3
+🟩 𝟷𝟾  1
+
+13 games played  ·  ⌀3.17 (excl. DNFs)  ·  7 DNFs
+```
 
 #### Yahtzee card
 
-Sending `yahtzee` triggers a DM with the player's personal Yahtzee scorecard across the five Yahtzee-style categories, each shown with a die face emoji:
+Sending `yahtzee` triggers a DM with the player's personal Yahtzee scorecard. Each category shows count and most recent date achieved:
 
 ```
-🎲 Routle Yahtzee Card — @busonly
+🎲 Routle Yahtzee Card — @𝚠𝚒𝚕𝚕𝚘𝚠𝚊𝚜𝚑𝚖𝚊𝚙𝚕𝚎
 
-⚀ Three of a Kind: 𝟺×
-⚁ Four of a Kind: 𝟷×
+⚀ Three of a Kind: 𝟺× (last 4/20)
+⚁ Four of a Kind: 𝟸× (last 4/20)
 ⚂ Full House: —
 ⚃ The Straight: —
 ⚄ Yahtzee!: —
 
-3/5 categories unlocked. 2 to go!
+2/5 categories unlocked. 3 to go!
 ```
 
-If a player has unlocked all five categories they receive a special full scorecard message.
+Players with all five categories unlocked receive a special full scorecard message.
 
 ---
 
@@ -364,8 +393,8 @@ All files created automatically on first run. Safe to edit manually.
 | `optouts.json` | `["handle", ...]` |
 | `known_players.json` | `{"handle": "did:plc:..."}` |
 | `dnf_counts.json` | `{"handle": total_dnf_count}` |
-| `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}}` |
-| `fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, used to enforce the 14-day no-repeat window |
+| `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}, "daily_score_1": {...}, ...}` |
+| `fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, enforces the 14-day no-repeat window |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 
@@ -393,12 +422,12 @@ WantedBy=multi-user.target
 ## Reliability notes
 
 - **Retry logic** — each post is attempted up to `API_RETRIES` times before giving up, with exponential backoff (1s, 2s, 4s …). All API calls — feed fetches, logins, DM sends — share the same retry wrapper, so transient timeouts and connection resets recover automatically rather than killing the poll cycle
-- **Configurable timeout** — `API_TIMEOUT` (default 20s) applies to every Bluesky API call. The previous 10s default was too tight for feed fetches returning up to 100 posts
+- **Configurable timeout** — `API_TIMEOUT` (default 20s) applies to every Bluesky API call
 - **Read-confirm** — after posting, the bot polls `app.bsky.feed.getPosts` until the post is confirmed visible in the AppView before continuing
 - **Correct threading** — multi-page standings use `root` (always page 1) and `parent` (immediately preceding post) as required by the AT Protocol
 - **Atomic writes** — all JSON data files use write-then-rename to prevent corruption
-- **Request timeouts** — all Bluesky API calls have a 10-second timeout
-- **Rotating log file** — `bot.log` is capped at 5 MB with up to `LOG_BACKUP_COUNT` backups (`bot.log.1`, `bot.log.2`, …), managed automatically via `logging.handlers.RotatingFileHandler`
+- **Rotating log file** — `bot.log` is capped at 5 MB with up to `LOG_BACKUP_COUNT` backups, managed automatically via `logging.handlers.RotatingFileHandler`
+- **Quiet hours** — reactions suppressed between `QUIET_HOURS_START` and `QUIET_HOURS_END`; scores are still recorded
 
 ---
 
@@ -423,7 +452,7 @@ routle-bot/
 ├── run_scheduler.py     # Continuous scheduler
 ├── run_bot.sh           # Shell interface for all commands
 ├── config.example.py    # Template — copy to config.py and fill in
-├── requirements.txt     # requests>=2.31.0
+├── requirements.txt     # Python 3.10+ required; requests>=2.31.0
 ├── .gitignore
 ├── LICENSE              # MIT
 └── README.md
