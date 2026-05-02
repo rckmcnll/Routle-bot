@@ -41,8 +41,8 @@ QUIET_HOURS_START  = getattr(_config, "QUIET_HOURS_START",  "23:00")
 QUIET_HOURS_END    = getattr(_config, "QUIET_HOURS_END",    "07:00")
 API_TIMEOUT        = getattr(_config, "API_TIMEOUT",        20)
 API_RETRIES        = getattr(_config, "API_RETRIES",        3)
-FUN_STANDINGS_TIME = getattr(_config, "FUN_STANDINGS_TIME", "")    # "" = disabled
-FUN_HISTORY_FILE   = getattr(_config, "FUN_HISTORY_FILE",   "fun_history.json")
+FUN_STANDINGS_TIME    = getattr(_config, "FUN_STANDINGS_TIME",    "")
+FUN_HISTORY_FILE      = getattr(_config, "FUN_HISTORY_FILE",      "fun_history.json")
 
 logger = logging.getLogger(__name__)
 
@@ -942,6 +942,8 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         "full_card": {},
         "part_time": {},
         "the_regulars": {},
+        "above_average": {},
+        "consistency_king": {},
     }
 
     # Tracks the most recent date each yahtzee category was achieved per player
@@ -1179,6 +1181,42 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         if avg_per_week >= 4:
             stats["the_regulars"][handle] = avg_per_week
 
+    # ── Above average — beat the daily community avg on every day played ───────
+    # Uses last 28 days. Min 7 days played to qualify.
+    above_avg_dates = sorted(d for d in scores if d > cutoff_28)
+    # Daily community avg (excl. DNFs) for each date in window
+    daily_avgs: dict[str, float] = {}
+    for d in above_avg_dates:
+        day_scores = [s for s in scores[d].values() if s != DNF]
+        if day_scores:
+            daily_avgs[d] = sum(day_scores) / len(day_scores)
+
+    all_handles_above = {h for d in above_avg_dates for h in scores[d]}
+    for handle in all_handles_above:
+        played = [(d, scores[d][handle]) for d in above_avg_dates if handle in scores[d]]
+        if len(played) < 7:
+            continue
+        # Count days where player beat (scored lower than) the daily avg
+        beat_days = sum(
+            1 for d, s in played
+            if s != DNF and d in daily_avgs and s < daily_avgs[d]
+        )
+        if beat_days == len(played):
+            # Beat the avg every single day played — rank by games played
+            stats["above_average"][handle] = len(played)
+
+    # ── Consistency King — lowest variance over last 28 days (min 7 games) ─────
+    for handle in all_handles_28:
+        sc_list = [
+            scores[d][handle] for d in above_avg_dates
+            if handle in scores[d] and scores[d][handle] != DNF
+        ]
+        if len(sc_list) < 7:
+            continue
+        mean = sum(sc_list) / len(sc_list)
+        var  = round(sum((x - mean) ** 2 for x in sc_list) / len(sc_list), 3)
+        stats["consistency_king"][handle] = var  # lower = more consistent
+
     return (
         {k: list(v.items()) for k, v in stats.items()},
         last_dates,
@@ -1237,6 +1275,10 @@ _FUN_CATEGORIES: dict[str, tuple] = {
         "🎟️ Methodology: players averaging between 1 and 3 games per week over the last 28 days — less than half the week. Not every day, but reliably there. The bus doesn't need to know your full schedule. It just needs to see you sometimes."),
     "the_regulars":  ("The Regulars",         "🚍", True,  "⌀{}gp/wk", 0,
         "🚍 Methodology: players averaging 4 or more games per week over the last 28 days. You know the route. You know the driver. You have a preferred seat. The bus would notice if you were gone."),
+    "above_average": ("Above Average",         "📐", True,  "{}d",      7,
+        "📐 Methodology: players who scored below the daily community average on every single day they played in the last 28 days. Minimum 7 days played. Ranked by days played. Quietly, consistently better than everyone else. Very annoying. Well done."),
+    "consistency_king": ("Consistency King",   "👑", False, "σ²={}",    0,
+        "👑 Methodology: lowest score variance over the last 28 days, minimum 7 non-DNF games. While others were riding the emotional rollercoaster, you were the bus that runs on schedule. Every day. Same score. Uncanny."),
     # Comedy
     "dnf_royalty":   ("DNF Royalty 👑",      "💀", True,  "{}✗",  1,
         "💀 Methodology: all-time total DNFs, ranked highest to lowest and celebrated not shamed. The route is hard. You showed up anyway. Every single time. That's actually kind of heroic."),
@@ -1554,6 +1596,67 @@ def format_player_history(handle: str, scores: dict) -> str:
     return "\n".join(lines)
 
 
+def format_player_wins(handle: str, scores: dict) -> str:
+    """
+    Build a personal wins DM — days where the player beat the community avg.
+    Shows all-time, this month, last 7 days.
+    A 'win' = scored strictly lower than the daily community average (excl. DNFs).
+    """
+    short = _short_handle(handle)
+    today = datetime.date.today()
+
+    def _win_rate(date_filter) -> tuple[int, int, float | None]:
+        """Returns (wins, played, win_pct) for dates passing date_filter."""
+        wins = played = 0
+        for d, day in scores.items():
+            if not date_filter(d): continue
+            if handle not in day:  continue
+            s = day[handle]
+            if s == DNF:
+                played += 1
+                continue
+            community = [v for h, v in day.items() if h != handle and v != DNF]
+            if not community:  continue
+            played += 1
+            if s < sum(community) / len(community):
+                wins += 1
+        pct = round(wins / played * 100, 1) if played else None
+        return wins, played, pct
+
+    # All-time
+    w_all, p_all, pct_all = _win_rate(lambda d: True)
+
+    # This month
+    this_month = today.strftime("%Y-%m")
+    w_mo, p_mo, pct_mo = _win_rate(lambda d: d.startswith(this_month))
+
+    # Last 7 days
+    cutoff_7 = (today - datetime.timedelta(days=7)).isoformat()
+    w_7, p_7, pct_7 = _win_rate(lambda d: d > cutoff_7)
+
+    today_str = today.isoformat()
+    w_td, p_td, pct_td = _win_rate(lambda d: d == today_str)
+
+    if p_all == 0:
+        return f"🏆 No {GAME_NAME} results on record for @{_mono(short)} yet!"
+
+    def _fmt(wins, played, pct):
+        if played == 0: return "no games"
+        return f"{_mono(str(wins))}/{_mono(str(played))} days ({_mono(str(pct))}%)"
+
+    lines = [
+        f"🏆 {GAME_NAME} wins — @{_mono(short)}",
+        f"(Days you beat the community avg, excl. DNFs)",
+        "",
+        f"Today:       {_fmt(w_td, p_td, pct_td)}",
+        f"Last 7d:     {_fmt(w_7, p_7, pct_7)}",
+        f"This month:  {_fmt(w_mo, p_mo, pct_mo)}",
+        f"Last month:  {_fmt(w_lm, p_lm, pct_lm)}",
+        f"All time:    {_fmt(w_all, p_all, pct_all)}",
+    ]
+    return "\n".join(lines)
+
+
 def format_player_stats(handle: str, scores: dict, aces: dict,
                         streaks: dict, dnf_counts: dict) -> str:
     """
@@ -1632,12 +1735,13 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
 
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     """
-    Poll the bot's DM inbox for messages containing STOP, START, STATS, HELP, YAHTZEE, HISTORY, or HIST.
+    Poll the bot's DM inbox for messages containing STOP, START, STATS, HELP, YAHTZEE, HISTORY, HIST, or WINS.
     - STOP          : adds sender to optout list, sends confirmation DM.
     - START         : removes sender from optout list, sends welcome-back DM.
     - STATS         : sends sender a personal stats card DM.
     - YAHTZEE       : sends sender their personal Yahtzee scorecard DM.
     - HISTORY/HIST  : sends sender their score history for the current year.
+    - WINS          : sends sender their daily win rate vs the community average.
     - HELP          : sends sender the command list.
     - unknown       : sends a friendly "missed that" reply pointing to HELP.
     Returns list of newly opted-out handles.
@@ -1682,7 +1786,8 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
         is_help    = msg_text == "HELP"
         is_yahtzee = msg_text == "YAHTZEE"
         is_history = msg_text in ("HISTORY", "HIST")
-        is_known   = is_stop or is_start or is_stats or is_help or is_yahtzee or is_history
+        is_wins    = msg_text == "WINS"
+        is_known   = is_stop or is_start or is_stats or is_help or is_yahtzee or is_history or is_wins
 
         # Find the sender (the non-bot member) — needed for all branches
         sender_handle = None
@@ -1755,6 +1860,12 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                 scores = load_scores()
                 _send_dm(format_player_history(sender_handle, scores))
 
+        elif is_wins:
+            logger.info("🏆 Wins request from @%s", sender_handle)
+            if not dry_run:
+                scores = load_scores()
+                _send_dm(format_player_wins(sender_handle, scores))
+
         elif is_help:
             logger.info("❓ Help request from @%s", sender_handle)
             if not dry_run:
@@ -1762,6 +1873,7 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
                     "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
                     "HIST    — your score history for this year\n"
+                    "WINS    — your daily win rate vs the community avg\n"
                     "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
                     "STOP    — turn off reply reactions\n"
                     "START   — turn reply reactions back on\n"
@@ -1776,6 +1888,7 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
                     "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
                     "HIST    — your score history for this year\n"
+                    "WINS    — your daily win rate vs the community avg\n"
                     "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
                     "STOP    — turn off reply reactions\n"
                     "START   — turn reply reactions back on\n"
@@ -2104,6 +2217,137 @@ def make_score_post(handle: str, display_name: str, score: int,
     return text + _streak_suffix(current_streak, is_new_best)
 
 
+# ─── Yahtzee achievement detection ────────────────────────────────────────────
+
+_YAHTZEE_CATS = ("three_kind", "four_kind", "full_house", "straight", "yahtzee")
+
+_YAHTZEE_CAT_LABELS = {
+    "three_kind": ("⚀", "Three of a Kind"),
+    "four_kind":  ("⚁", "Four of a Kind"),
+    "full_house": ("⚂", "Full House"),
+    "straight":   ("⚃", "The Straight"),
+    "yahtzee":    ("⚄", "Yahtzee!"),
+}
+
+
+def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
+    """
+    Return the set of Yahtzee categories the player has achieved at least once,
+    computed directly from scores without the full community stats pass.
+    """
+    dated = sorted(
+        (d, scores[d][handle]) for d in scores if handle in scores.get(d, {})
+    )
+    sc = [s for _, s in dated]
+    n  = len(dated)
+    achieved: set[str] = set()
+
+    def _consec(start: int, length: int) -> bool:
+        for j in range(start, start + length - 1):
+            d1 = datetime.date.fromisoformat(dated[j][0])
+            d2 = datetime.date.fromisoformat(dated[j + 1][0])
+            if (d2 - d1).days != 1:
+                return False
+        return True
+
+    # four_kind first — consumed windows excluded from three_kind
+    four_consumed: set[int] = set()
+    i = 0
+    while i <= n - 4:
+        if _consec(i, 4):
+            w = sc[i:i+4]
+            if DNF not in w and len(set(w)) == 1:
+                achieved.add("four_kind")
+                for j in range(i, i + 4):
+                    four_consumed.add(j)
+                i += 4; continue
+        i += 1
+
+    i = 0
+    while i <= n - 3:
+        if i in four_consumed: i += 1; continue
+        if _consec(i, 3):
+            w = sc[i:i+3]
+            if DNF not in w and len(set(w)) == 1:
+                achieved.add("three_kind")
+                i += 3; continue
+        i += 1
+
+    i = 0
+    while i <= n - 5:
+        if _consec(i, 5):
+            w = sc[i:i+5]
+            if DNF not in w and all(v in w for v in range(1, MAX_SQUARES + 1)):
+                achieved.add("full_house")
+                i += 5; continue
+        i += 1
+
+    i = 0
+    while i <= n - 5:
+        if _consec(i, 5):
+            w = sc[i:i+5]
+            if sorted(w) == list(range(1, MAX_SQUARES + 1)):
+                achieved.add("straight")
+                i += 5; continue
+        i += 1
+
+    i = 0
+    while i <= n - 5:
+        if _consec(i, 5):
+            w = sc[i:i+5]
+            if DNF not in w and len(set(w)) == 1:
+                achieved.add("yahtzee")
+                i += 5; continue
+        i += 1
+
+    return achieved
+
+
+def check_yahtzee_achievements(handle: str, scores: dict,
+                               date_str: str) -> tuple[list[str], set[str]]:
+    """
+    Determine which Yahtzee categories were newly triggered by today's score.
+    Compares categories achievable with today vs without today.
+    Returns (new_cats, all_achieved_after).
+    """
+    after = _player_yahtzee_categories(handle, scores)
+
+    # Temporarily remove today's score to get the before state
+    today_score = scores[date_str].pop(handle, None)
+    before = _player_yahtzee_categories(handle, scores)
+    if today_score is not None:
+        scores[date_str][handle] = today_score   # restore
+
+    new_cats = sorted(after - before)
+    return new_cats, after
+
+
+def make_yahtzee_notification(display_name: str, new_cats: list[str],
+                              all_achieved: set[str]) -> str:
+    """
+    Build a congratulations reply for newly achieved Yahtzee categories.
+    Appends a full card bonus line if all 5 are now achieved.
+    """
+    if len(new_cats) == 1:
+        die, label = _YAHTZEE_CAT_LABELS[new_cats[0]]
+        lines = [f"{die} {display_name} just hit {label} on their Yahtzee card! 🎲"]
+    else:
+        lines = [f"🎲 {display_name} just unlocked multiple Yahtzee categories!"]
+        for cat in new_cats:
+            die, label = _YAHTZEE_CAT_LABELS[cat]
+            lines.append(f"  {die} {label}")
+
+    if set(_YAHTZEE_CATS) <= all_achieved:
+        lines.append("")
+        lines.append("🎊 FULL SCORECARD COMPLETE! All five categories unlocked.")
+        lines.append("DM YAHTZEE to see your card. You are the dice. 🚌")
+    else:
+        remaining = len(_YAHTZEE_CATS) - len(all_achieved)
+        lines.append(f"({len(all_achieved)}/5 categories · {remaining} to go — DM YAHTZEE for your card)")
+
+    return "\n".join(lines)
+
+
 # ─── Feed collection ───────────────────────────────────────────────────────────
 
 def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
@@ -2196,6 +2440,17 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                 reaction = make_score_post(author, display_name, score, current_streak, is_new_best)
                 if reaction:
                     _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
+
+            # Yahtzee achievement check — fires on any score that may complete a run
+            new_cats, all_achieved = check_yahtzee_achievements(author, scores, date_str)
+            if new_cats:
+                logger.info("🎲 Yahtzee achievement(s) for @%s: %s", author, new_cats)
+                notif = make_yahtzee_notification(display_name, new_cats, all_achieved)
+                _post_and_print(
+                    f"Yahtzee achievement for @{author}",
+                    notif, session, dry_run,
+                    reply_to=post_ref, is_reaction=True,
+                )
 
     save_aces(aces)
     save_dnf_counts(dnf_counts)
