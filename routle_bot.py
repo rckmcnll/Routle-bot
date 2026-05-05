@@ -1648,6 +1648,12 @@ def format_player_wins(handle: str, scores: dict) -> str:
     cutoff_7 = (today - datetime.timedelta(days=7)).isoformat()
     w_7, p_7, pct_7 = _win_rate(lambda d: d > cutoff_7)
 
+    # Last month
+    first_this_month = today.replace(day=1)
+    last_month_end   = first_this_month - datetime.timedelta(days=1)
+    last_month_str   = last_month_end.strftime("%Y-%m")
+    w_lm, p_lm, pct_lm = _win_rate(lambda d: d.startswith(last_month_str))
+
     today_str = today.isoformat()
     w_td, p_td, pct_td = _win_rate(lambda d: d == today_str)
 
