@@ -106,11 +106,22 @@ def main():
     logger.info("✓ Logged in as @%s", BOT_HANDLE)
 
     last_leaderboard_fired: dict[str, str] = {}
-    last_poll_time: datetime.datetime | None = None
-    poll_interval = datetime.timedelta(minutes=POLL_INTERVAL_MINUTES)
+    last_poll_time:   datetime.datetime | None = None
+    last_reauth_time: datetime.datetime        = datetime.datetime.now()
+    poll_interval  = datetime.timedelta(minutes=POLL_INTERVAL_MINUTES)
+    reauth_interval = datetime.timedelta(hours=6)   # proactive token refresh
 
     while True:
         now = datetime.datetime.now()
+
+        # ── Proactive re-authentication every 6 hours ──────────────────────────
+        if (now - last_reauth_time) >= reauth_interval:
+            try:
+                session = login(BOT_HANDLE, BOT_PASSWORD)
+                last_reauth_time = now
+                logger.info("🔑 Proactive re-auth complete.")
+            except Exception:
+                logger.exception("Proactive re-auth failed — will retry next tick.")
 
         # ── Poll for new results & fire reactions ──────────────────────────────
         if last_poll_time is None or (now - last_poll_time) >= poll_interval:
@@ -122,12 +133,14 @@ def main():
                     logger.info("%d new result(s) processed.", new)
                 else:
                     logger.debug("No new results.")
-            except Exception:
+            except Exception as exc:
                 logger.exception("Poll failed:")
-                # Re-authenticate in case the session expired
+                # Re-authenticate — 400/401 indicate a stale token; other errors
+                # may also be resolved by a fresh session.
                 try:
                     session = login(BOT_HANDLE, BOT_PASSWORD)
-                    logger.info("Re-authenticated.")
+                    last_reauth_time = now
+                    logger.info("Re-authenticated after poll failure.")
                 except Exception:
                     logger.exception("Re-auth also failed. Will retry next tick.")
 

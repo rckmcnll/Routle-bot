@@ -146,8 +146,22 @@ def _api_request(method: str, url: str, **kwargs) -> requests.Response:
                 logger.error(
                     "Network error after %d attempts: %s", API_RETRIES, exc
                 )
-        except requests.exceptions.HTTPError:
-            raise   # don't retry 4xx/5xx — propagate immediately
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            if status == 401:
+                # Unauthorised — treat like a transient error so caller can re-auth
+                last_exc = exc
+                if attempt < API_RETRIES:
+                    delay = 2 ** (attempt - 1)
+                    logger.warning(
+                        "401 Unauthorised (attempt %d/%d) — retrying in %ds",
+                        attempt, API_RETRIES, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("401 Unauthorised after %d attempts", API_RETRIES)
+            else:
+                raise   # 400, 403, 404, 5xx — propagate immediately
     raise last_exc
 
 
