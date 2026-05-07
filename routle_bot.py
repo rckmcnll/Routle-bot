@@ -13,6 +13,7 @@ import json
 import os
 import time
 import random
+import string as _string
 import datetime
 import logging
 import requests
@@ -43,6 +44,41 @@ API_TIMEOUT        = getattr(_config, "API_TIMEOUT",        20)
 API_RETRIES        = getattr(_config, "API_RETRIES",        3)
 FUN_STANDINGS_TIME    = getattr(_config, "FUN_STANDINGS_TIME",    "")
 FUN_HISTORY_FILE      = getattr(_config, "FUN_HISTORY_FILE",      "fun_history.json")
+
+# ── Challenge system config (safe defaults for backward compat) ───────────────
+CHALLENGES_FILE            = getattr(_config, "CHALLENGES_FILE",            "challenges.json")
+CHALLENGE_CODE_LENGTH      = getattr(_config, "CHALLENGE_CODE_LENGTH",      6)
+CHALLENGE_MAX_PARTICIPANTS = getattr(_config, "CHALLENGE_MAX_PARTICIPANTS", 20)
+CHALLENGE_REPORT_TIME      = getattr(_config, "CHALLENGE_REPORT_TIME",      None)
+CHALLENGE_BEST_OF          = getattr(_config, "CHALLENGE_BEST_OF",          5)
+CHALLENGE_CREATED_MESSAGES = getattr(_config, "CHALLENGE_CREATED_MESSAGES", [
+    "Challenge accepted! Your invite code is {code} — valid for 24 hours. "
+    "Share it with your rivals and tell them to DM it to me. "
+    "Contest starts tomorrow and runs for 7 days. Best 5 of 7 scores wins. 🚊",
+    "Oh, you want beef? Your challenge code is {code}. "
+    "Send it to whoever thinks they can out-Routle you. "
+    "Registration closes at midnight, contest kicks off tomorrow. 🚌",
+    "A challenger appears! Code: {code} — good for 24 hours. "
+    "Rope in your fellow transit nerds. Best 5 of 7 scores wins. 🚋",
+    "Your duel is registered. Invite code: {code}. "
+    "Share it around — anyone who DMs me that code joins the fun. "
+    "Week-long battle starts tomorrow, daily standings delivered here. 🗺️",
+])
+CHALLENGE_JOINED_MESSAGES = getattr(_config, "CHALLENGE_JOINED_MESSAGES", [
+    "You're in! Challenge {code} starts tomorrow — I'll DM you standings each day. "
+    "Best 5 of 7 scores wins. 🚊",
+    "Tickets punched! You've joined challenge {code}. "
+    "Runs for 7 days starting tomorrow, daily standings in your DMs. 🚌",
+    "Boarded! You're registered for challenge {code}. "
+    "Starts tomorrow, standings delivered daily. Best of luck! 🚋",
+])
+CHALLENGE_NOT_FOUND_MESSAGE  = getattr(_config, "CHALLENGE_NOT_FOUND_MESSAGE",
+    "Hmm, I don't recognize that code. It may have expired or been mistyped — "
+    "codes are valid for 24 hours. Ask your challenger for a fresh one!")
+CHALLENGE_FULL_MESSAGE       = getattr(_config, "CHALLENGE_FULL_MESSAGE",
+    "Sorry, that challenge is already full. Ask them to start a new one!")
+CHALLENGE_ALREADY_IN_MESSAGE = getattr(_config, "CHALLENGE_ALREADY_IN_MESSAGE",
+    "You're already registered for that challenge — starts tomorrow!")
 
 logger = logging.getLogger(__name__)
 
@@ -1753,17 +1789,386 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
     return "\n".join(lines)
 
 
+# ─── Challenge System ──────────────────────────────────────────────────────────
+# Unambiguous characters for invite codes: no 0/O/1/I/L
+_CODE_CHARS = [c for c in (_string.ascii_uppercase + _string.digits)
+               if c not in "0O1IL"]
+
+
+def _load_challenges() -> dict:
+    """Return the challenges dict from disk, or {} if file missing."""
+    if not os.path.exists(CHALLENGES_FILE):
+        return {}
+    with open(CHALLENGES_FILE, "r") as f:
+        return json.load(f)
+
+
+def _save_challenges(challenges: dict) -> None:
+    _tmp = CHALLENGES_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(challenges, f, indent=2)
+    os.replace(_tmp, CHALLENGES_FILE)
+
+
+def _generate_code(challenges: dict) -> str:
+    """Generate a unique invite code not already in use."""
+    for _ in range(100):
+        code = "".join(random.choices(_CODE_CHARS, k=CHALLENGE_CODE_LENGTH))
+        if code not in challenges:
+            return code
+    raise RuntimeError("Could not generate a unique challenge code after 100 tries")
+
+
+def _challenge_score_value(score) -> int:
+    """Numeric ranking value for challenge scoring; DNF -> 7 (worst). Lower is better."""
+    if score in (None, "DNF", "dnf"):
+        return 7
+    try:
+        return int(score)
+    except (TypeError, ValueError):
+        return 7
+
+
+def _challenge_standings(challenge: dict, scores: dict, best_of: int) -> list:
+    """
+    Compute standings for a challenge.
+    Returns list of dicts sorted best-to-worst:
+      { handle, scores_played, best_scores, total, avg, joined_date }
+    Only counts scores within the challenge window AND >= participant's join_date.
+    """
+    start = challenge["start_date"]
+    end   = challenge["end_date"]
+    rows  = []
+
+    for participant in challenge["participants"]:
+        handle      = participant["handle"]
+        joined_date = participant["joined_date"]
+
+        qualifying = []
+        for date_str, day_scores in scores.items():
+            if date_str < start or date_str > end:
+                continue
+            if date_str < joined_date:
+                continue
+            if handle in day_scores:
+                qualifying.append(_challenge_score_value(day_scores[handle]))
+
+        qualifying.sort()
+        best   = qualifying[:best_of]
+        total  = sum(best)
+        played = len(qualifying)
+        avg    = round(total / len(best), 2) if best else None
+
+        rows.append({
+            "handle":        handle,
+            "scores_played": played,
+            "best_scores":   best,
+            "total":         total,
+            "avg":           avg,
+            "joined_date":   joined_date,
+        })
+
+    rows.sort(key=lambda r: (
+        r["total"] if r["best_scores"] else 999,
+        r["avg"]   if r["avg"] is not None else 9.9,
+        r["handle"]
+    ))
+    return rows
+
+
+def _challenge_report_text(challenge: dict, standings: list,
+                            is_final: bool, best_of: int) -> str:
+    """Format the DM standings report for a challenge."""
+    code  = challenge["code"]
+    start = challenge["start_date"]
+    end   = challenge["end_date"]
+    n     = len(standings)
+    label = "🏁 FINAL RESULTS" if is_final else "📊 DAILY STANDINGS"
+
+    lines = [
+        f"{label} — Challenge {code}",
+        f"📅 {start} → {end}  |  {n} player{'s' if n != 1 else ''}",
+        f"Scoring: best {best_of} of 7 days  (DNF = 7)",
+        "─────────────────────",
+    ]
+
+    medals     = ["🥇", "🥈", "🥉"]
+    prev_total = None
+    tied_rank  = 1
+
+    for i, row in enumerate(standings):
+        rank = i + 1
+        if row["total"] == prev_total:
+            rank = tied_rank
+        else:
+            tied_rank = rank
+        prev_total = row["total"]
+
+        medal  = medals[rank - 1] if rank <= 3 else f"{rank}."
+        handle = row["handle"]
+        played = row["scores_played"]
+
+        if row["best_scores"]:
+            score_str = "+".join(str(s) for s in row["best_scores"])
+            avg_str   = f"{row['avg']:.2f}" if row["avg"] is not None else "—"
+            lines.append(
+                f"{medal} @{handle}  [{score_str}]={row['total']}  "
+                f"avg {avg_str}  ({played} day{'s' if played != 1 else ''} played)"
+            )
+        else:
+            lines.append(f"{medal} @{handle}  (no scores yet)")
+
+    lines.append("─────────────────────")
+    if is_final:
+        winner = standings[0]["handle"] if standings else "nobody"
+        lines.append(f"🎉 Congratulations @{winner} — champion of challenge {code}!")
+        lines.append("Thanks for playing, Routlers. 🚋")
+    else:
+        lines.append("Good luck tomorrow! 🚊")
+
+    return "\n".join(lines)
+
+
+def _dm_challenge_report(challenge: dict, session: dict,
+                          is_final: bool = False) -> None:
+    """Send the challenge standings to every participant via DM."""
+    scores    = load_scores()
+    standings = _challenge_standings(challenge, scores, CHALLENGE_BEST_OF)
+    text      = _challenge_report_text(challenge, standings, is_final, CHALLENGE_BEST_OF)
+    optouts   = load_optouts()
+    sent = skipped = 0
+
+    for participant in challenge["participants"]:
+        handle = participant["handle"]
+        if handle in optouts:
+            skipped += 1
+            continue
+        try:
+            send_dm(session, handle, text)
+            sent += 1
+        except Exception:
+            logger.exception("Failed to DM challenge report to @%s", handle)
+
+    logger.info("Challenge %s report sent to %d participant(s), %d skipped.",
+                challenge["code"], sent, skipped)
+
+
+def _notify_challenge_start(challenge: dict, session: dict) -> None:
+    """DM all participants that the contest has officially started."""
+    code = challenge["code"]
+    end  = challenge["end_date"]
+    n    = len(challenge["participants"])
+    text = (
+        f"🚦 Challenge {code} has started! "
+        f"{n} player{'s are' if n != 1 else ' is'} competing through {end}. "
+        f"Best {CHALLENGE_BEST_OF} of 7 scores wins. "
+        f"I'll DM you standings daily. Good luck! 🚊"
+    )
+    optouts = load_optouts()
+    for participant in challenge["participants"]:
+        if participant["handle"] not in optouts:
+            try:
+                send_dm(session, participant["handle"], text)
+            except Exception:
+                logger.exception("Start notification DM failed for @%s",
+                                 participant["handle"])
+
+
+def tick_challenges(session: dict) -> None:
+    """
+    Scheduler-facing function. Call once per day at CHALLENGE_REPORT_TIME.
+    1. Activates challenges whose start_date is today.
+    2. Sends daily standings DMs for active challenges.
+    3. Finalizes challenges whose end_date was yesterday.
+    """
+    challenges = _load_challenges()
+    if not challenges:
+        return
+
+    today     = datetime.date.today().isoformat()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    changed   = False
+
+    for code, ch in list(challenges.items()):
+        state = ch.get("status", "registering")
+
+        # 1. Activate
+        if state == "registering" and ch["start_date"] == today:
+            ch["status"] = "active"
+            changed = True
+            logger.info("Challenge %s is now ACTIVE (started %s).", code, today)
+            _notify_challenge_start(ch, session)
+
+        # 2. Daily standings (active only)
+        if state == "active" and CHALLENGE_REPORT_TIME:
+            if ch.get("last_report_date") != today:
+                ch["last_report_date"] = today
+                changed = True
+                logger.info("Sending daily standings for challenge %s.", code)
+                try:
+                    _dm_challenge_report(ch, session, is_final=False)
+                except Exception:
+                    logger.exception("Daily standings DM failed for %s.", code)
+
+        # 3. Finalize: mark complete and send final report the morning after end_date
+        if state == "active" and ch["end_date"] == yesterday:
+            ch["status"] = "complete"
+            changed = True
+            logger.info("Challenge %s COMPLETE. Sending final report.", code)
+            try:
+                _dm_challenge_report(ch, session, is_final=True)
+            except Exception:
+                logger.exception("Final standings DM failed for %s.", code)
+
+    if changed:
+        _save_challenges(challenges)
+
+
+def handle_dm_challenge_create(sender_handle: str, session: dict) -> None:
+    """User sent CHALLENGE — create a new challenge, enroll them, reply with code."""
+    challenges = _load_challenges()
+
+    # Block duplicate active challenge from same creator
+    for code, ch in challenges.items():
+        if (ch.get("creator") == sender_handle
+                and ch["status"] in ("registering", "active")):
+            send_dm(
+                session, sender_handle,
+                f"You already have an active challenge ({code}) running "
+                f"through {ch['end_date']}. Finish that one first!",
+            )
+            return
+
+    code       = _generate_code(challenges)
+    today      = datetime.date.today().isoformat()
+    start_date = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    end_date   = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+
+    challenges[code] = {
+        "code":             code,
+        "creator":          sender_handle,
+        "status":           "registering",
+        "created_date":     today,
+        "start_date":       start_date,
+        "end_date":         end_date,
+        "last_report_date": None,
+        "participants": [
+            {"handle": sender_handle, "joined_date": start_date}
+        ],
+    }
+    _save_challenges(challenges)
+
+    msg = random.choice(CHALLENGE_CREATED_MESSAGES).format(code=code)
+    send_dm(session, sender_handle, msg)
+
+    # Second DM: a pre-formatted invite the creator can copy and forward
+    start_dt = datetime.date.fromisoformat(start_date)
+    end_dt   = datetime.date.fromisoformat(end_date)
+    start_fmt = start_dt.strftime("%A, %B %-d")
+    end_fmt   = end_dt.strftime("%A, %B %-d, %Y")
+    invite_msg = (
+        f"I'm challenging you to a 1-week Routle - TriMet tournament!\n\n"
+        f"It begins tomorrow, {start_fmt} and runs until {end_fmt}.\n\n"
+        f"To accept, DM {code} to @{BOT_HANDLE}"
+    )
+    send_dm(session, sender_handle, invite_msg)
+    logger.info("Challenge %s created by @%s (start=%s, end=%s).",
+                code, sender_handle, start_date, end_date)
+
+
+def handle_dm_challenge_join(sender_handle: str, code: str,
+                              session: dict) -> None:
+    """User sent a bare invite code — add them to the challenge if valid."""
+    challenges = _load_challenges()
+    ch = challenges.get(code.upper())
+
+    if ch is None or ch["status"] == "complete":
+        send_dm(session, sender_handle, CHALLENGE_NOT_FOUND_MESSAGE)
+        return
+
+    handles = [p["handle"] for p in ch["participants"]]
+    if sender_handle in handles:
+        send_dm(session, sender_handle, CHALLENGE_ALREADY_IN_MESSAGE)
+        return
+
+    if (CHALLENGE_MAX_PARTICIPANTS is not None
+            and len(ch["participants"]) >= CHALLENGE_MAX_PARTICIPANTS):
+        send_dm(session, sender_handle, CHALLENGE_FULL_MESSAGE)
+        return
+
+    today = datetime.date.today().isoformat()
+    # Late joiners only get scores from their join date onward
+    join_scores_from = ch["start_date"] if today < ch["start_date"] else today
+
+    ch["participants"].append({
+        "handle":      sender_handle,
+        "joined_date": join_scores_from,
+    })
+    _save_challenges(challenges)
+
+    msg = random.choice(CHALLENGE_JOINED_MESSAGES).format(code=code.upper())
+    send_dm(session, sender_handle, msg)
+
+    # Notify the challenge creator that someone accepted
+    creator = ch.get("creator")
+    if creator and creator != sender_handle:
+        n = len(ch["participants"])  # includes the new joiner
+        short_joiner = _short_handle(sender_handle)
+        creator_msg = (
+            f"@{short_joiner} just accepted your challenge {code.upper()}! "
+            f"{n} player{'s are' if n != 1 else ' is'} now registered. "
+            f"Contest starts {ch['start_date']}. 🚊"
+        )
+        send_dm(session, creator, creator_msg)
+
+    logger.info("@%s joined challenge %s (scores from %s).",
+                sender_handle, code, join_scores_from)
+
+
+def handle_dm_challenge_status(sender_handle: str, session: dict) -> None:
+    """User sent MYSTATUS — show their active challenges and current rank."""
+    challenges = _load_challenges()
+    active = [
+        ch for ch in challenges.values()
+        if ch["status"] in ("registering", "active")
+        and any(p["handle"] == sender_handle for p in ch["participants"])
+    ]
+
+    if not active:
+        send_dm(
+            session, sender_handle,
+            "You're not in any active challenges right now. "
+            "Send CHALLENGE to start one, or ask a friend for their invite code!",
+        )
+        return
+
+    scores = load_scores()
+    lines  = [f"Your active challenge{'s' if len(active) > 1 else ''}:"]
+
+    for ch in active:
+        code      = ch["code"]
+        status    = ch["status"]
+        n         = len(ch["participants"])
+        standings = _challenge_standings(ch, scores, CHALLENGE_BEST_OF)
+        rank = next(
+            (i + 1 for i, row in enumerate(standings)
+             if row["handle"] == sender_handle), "?"
+        )
+        lines.append(
+            f"\n📋 {code} | {status} | ends {ch['end_date']} | "
+            f"{n} player{'s' if n != 1 else ''} | your rank: {rank}/{n}"
+        )
+        if status == "registering":
+            lines.append(f"   Starts {ch['start_date']} — share code {code} to invite!")
+
+    send_dm(session, sender_handle, "\n".join(lines))
+
+
 def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     """
-    Poll the bot's DM inbox for messages containing STOP, START, STATS, HELP, YAHTZEE, HISTORY, HIST, or WINS.
-    - STOP          : adds sender to optout list, sends confirmation DM.
-    - START         : removes sender from optout list, sends welcome-back DM.
-    - STATS         : sends sender a personal stats card DM.
-    - YAHTZEE       : sends sender their personal Yahtzee scorecard DM.
-    - HISTORY/HIST  : sends sender their score history for the current year.
-    - WINS          : sends sender their daily win rate vs the community average.
-    - HELP          : sends sender the command list.
-    - unknown       : sends a friendly "missed that" reply pointing to HELP.
+    Poll the bot's DM inbox for commands.
+    Handles: STOP, START, STATS, HELP, YAHTZEE, HISTORY/HIST, WINS,
+             CHALLENGE, MYSTATUS, and bare invite codes.
     Returns list of newly opted-out handles.
     """
     token = session["accessJwt"]
@@ -1800,14 +2205,26 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
 
         msg_text = last_msg.get("text", "").strip().upper()
 
-        is_stop    = "STOP"    in msg_text
-        is_start   = "START"   in msg_text
-        is_stats   = msg_text == "STATS"
-        is_help    = msg_text == "HELP"
-        is_yahtzee = msg_text == "YAHTZEE"
-        is_history = msg_text in ("HISTORY", "HIST")
-        is_wins    = msg_text == "WINS"
-        is_known   = is_stop or is_start or is_stats or is_help or is_yahtzee or is_history or is_wins
+        is_stop       = "STOP"    in msg_text
+        is_start      = "START"   in msg_text
+        is_stats      = msg_text == "STATS"
+        is_help       = msg_text == "HELP"
+        is_yahtzee    = msg_text == "YAHTZEE"
+        is_history    = msg_text in ("HISTORY", "HIST")
+        is_wins       = msg_text == "WINS"
+        is_challenge  = msg_text == "CHALLENGE"
+        is_mystatus   = msg_text == "MYSTATUS"
+        # Invite code: correct length, all alphanumeric uppercase, not another command
+        is_invite_code = (
+            len(msg_text) == CHALLENGE_CODE_LENGTH
+            and msg_text.isalnum()
+            and not any([is_stop, is_start, is_stats, is_help,
+                         is_yahtzee, is_history, is_wins,
+                         is_challenge, is_mystatus])
+        )
+        is_known = (is_stop or is_start or is_stats or is_help or is_yahtzee
+                    or is_history or is_wins or is_challenge or is_mystatus
+                    or is_invite_code)
 
         # Find the sender (the non-bot member) — needed for all branches
         sender_handle = None
@@ -1886,18 +2303,35 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                 scores = load_scores()
                 _send_dm(format_player_wins(sender_handle, scores))
 
+        elif is_challenge:
+            logger.info("⚔️  Challenge create request from @%s", sender_handle)
+            if not dry_run:
+                handle_dm_challenge_create(sender_handle, session)
+
+        elif is_mystatus:
+            logger.info("📋 Challenge status request from @%s", sender_handle)
+            if not dry_run:
+                handle_dm_challenge_status(sender_handle, session)
+
+        elif is_invite_code:
+            logger.info("🎟️  Invite code attempt from @%s: %s", sender_handle, msg_text)
+            if not dry_run:
+                handle_dm_challenge_join(sender_handle, msg_text, session)
+
         elif is_help:
             logger.info("❓ Help request from @%s", sender_handle)
             if not dry_run:
                 _send_dm(
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
-                    "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
-                    "HIST    — your score history for this year\n"
-                    "WINS    — your daily win rate vs the community avg\n"
-                    "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
-                    "STOP    — turn off reply reactions\n"
-                    "START   — turn reply reactions back on\n"
-                    "HELP    — show this message"
+                    "STATS     — your personal stats card (games, avg, rank, streaks, aces)\n"
+                    "HIST      — your score history for this year\n"
+                    "WINS      — your daily win rate vs the community avg\n"
+                    "YAHTZEE   — your personal Yahtzee scorecard 🎲\n"
+                    "CHALLENGE — start a new head-to-head challenge ⚔️\n"
+                    "MYSTATUS  — see your active challenges and current rank\n"
+                    "STOP      — turn off reply reactions\n"
+                    "START     — turn reply reactions back on\n"
+                    "HELP      — show this message"
                 )
 
         elif not is_known:
@@ -1906,13 +2340,15 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
                 _send_dm(
                     "Sorry, I missed that while the driver was making an announcement. 🚌\n\n"
                     f"👋 {GAME_NAME} bot commands — DM any of these words:\n\n"
-                    "STATS   — your personal stats card (games, avg, rank, streaks, aces)\n"
-                    "HIST    — your score history for this year\n"
-                    "WINS    — your daily win rate vs the community avg\n"
-                    "YAHTZEE — your personal Yahtzee scorecard 🎲\n"
-                    "STOP    — turn off reply reactions\n"
-                    "START   — turn reply reactions back on\n"
-                    "HELP    — show this message"
+                    "STATS     — your personal stats card (games, avg, rank, streaks, aces)\n"
+                    "HIST      — your score history for this year\n"
+                    "WINS      — your daily win rate vs the community avg\n"
+                    "YAHTZEE   — your personal Yahtzee scorecard 🎲\n"
+                    "CHALLENGE — start a new head-to-head challenge ⚔️\n"
+                    "MYSTATUS  — see your active challenges and current rank\n"
+                    "STOP      — turn off reply reactions\n"
+                    "START     — turn reply reactions back on\n"
+                    "HELP      — show this message"
                 )
 
     save_optouts(optouts)

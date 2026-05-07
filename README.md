@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v6
+# 🚌 Routle Bot — v6.1
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, follows new players, and supports a full suite of player DM commands.
 
@@ -86,6 +86,51 @@ Multi-page standings use correct Bluesky thread structure (`root` always points 
 
 ### Feed polling
 Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence.
+
+### Head-to-head challenges
+
+Players can challenge each other to private 1-week tournaments via DM. The bot manages the full lifecycle — registration, daily standings, and a final report.
+
+**How it works:**
+1. A player DMs `CHALLENGE` to start a new challenge. The bot replies with a 6-character invite code and a pre-formatted invite message ready to copy and send.
+2. The creator shares the code. Invited players DM the code to the bot to enroll.
+3. The bot notifies the creator each time someone accepts.
+4. The challenge activates the next day and a start notice goes to all participants.
+5. Daily standings DMs are sent at `CHALLENGE_REPORT_TIME` throughout the week.
+6. On the morning after the final day, the bot sends a final report with champion and full results to everyone.
+
+**Scoring:** best `CHALLENGE_BEST_OF` scores (default: 5) of 7 days, lowest total wins. DNF counts as 7. Late joiners are welcome — only scores from their join date onward count.
+
+**Invite flow example:**
+
+Creator DMs `CHALLENGE`, receives a confirmation followed immediately by a ready-to-forward invite:
+```
+I'm challenging you to a 1-week Routle - TriMet tournament!
+
+It begins tomorrow, Thursday, May 8 and runs until Thursday, May 15, 2026.
+
+To accept, DM AB3X7K to @pdxroutl.bsky.social
+```
+
+When an invitee accepts, the creator is notified:
+```
+@busonly just accepted your challenge AB3X7K! 3 players are now registered. Contest starts 2026-05-08. 🚊
+```
+
+Final report sent to all participants on conclusion:
+```
+🏁 FINAL RESULTS — Challenge AB3X7K
+📅 2026-05-08 → 2026-05-15  |  4 players
+Scoring: best 5 of 7 days  (DNF = 7)
+─────────────────────
+🥇 @busonly        [1+1+2+1+2]=7   avg 1.40  (7 days played)
+🥈 @willowashmaple [1+2+2+3+3]=11  avg 2.20  (6 days played)
+🥉 @khrisoden      [2+2+3+3+4]=14  avg 2.80  (5 days played)
+4. @rockom         [1+2+3+4+5]=15  avg 3.00  (7 days played)
+─────────────────────
+🎉 Congratulations @busonly — champion of challenge AB3X7K!
+Thanks for playing, Routlers. 🚋
+```
 
 ---
 
@@ -276,6 +321,16 @@ help             Show help
 | `DNF_COUNTS_FILE` | `dnf_counts.json` | All-time DNF counts |
 | `RECORDS_FILE` | `records.json` | Community records (player count highs, per-score highs) |
 | `FUN_HISTORY_FILE` | `fun_history.json` | Last posted date per fun category (14-day repeat guard) |
+| `CHALLENGES_FILE` | `challenges.json` | All challenge state |
+
+### Challenges
+
+| Setting | Default | Description |
+|---|---|---|
+| `CHALLENGE_REPORT_TIME` | `None` | Time (HH:MM, 24h local) to run the daily challenge tick — activates new challenges, sends standings DMs, finalizes completed ones. `None` disables automatic challenge management |
+| `CHALLENGE_BEST_OF` | `5` | Number of best daily scores counted toward the final ranking (of 7 days) |
+| `CHALLENGE_CODE_LENGTH` | `6` | Characters in a generated invite code |
+| `CHALLENGE_MAX_PARTICIPANTS` | `20` | Max players per challenge (`None` = unlimited) |
 
 ### Logging
 
@@ -302,7 +357,10 @@ Players can DM the bot handle with these keywords:
 | `start` | Re-enable reply reactions. |
 | `stats` | Receive a personal stats card (see below). |
 | `hist` or `history` | Receive your score history for the current year, grouped by month. |
+| `wins` | Receive your daily win rate vs the community average — all-time, this month, last 7 days. |
 | `yahtzee` | Receive a personal Yahtzee scorecard (see below). |
+| `challenge` | Start a new head-to-head challenge. Returns an invite code and a ready-to-forward invite message. |
+| `mystatus` | See your active challenges and your current rank in each. |
 | `help` | Receive a list of all available DM commands. |
 
 Unknown DMs receive a friendly driver-announcement reply with the full command list embedded.
@@ -395,6 +453,7 @@ All files created automatically on first run. Safe to edit manually.
 | `dnf_counts.json` | `{"handle": total_dnf_count}` |
 | `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}, "daily_score_1": {...}, ...}` |
 | `fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, enforces the 14-day no-repeat window |
+| `challenges.json` | All challenge state — code, creator, status, start/end dates, participants, last report date. Created automatically on first `CHALLENGE` DM. |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 

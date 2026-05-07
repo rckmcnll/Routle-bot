@@ -22,6 +22,7 @@ from config import LEADERBOARD_TIME, WEEKLY_LEADERBOARD_DAY, POLL_INTERVAL_MINUT
 from routle_bot import (
     login, poll, run, BOT_HANDLE, BOT_PASSWORD, setup_logging,
     load_scores, pick_fun_category, post_fun_category, FUN_STANDINGS_TIME,
+    tick_challenges, CHALLENGE_REPORT_TIME,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,19 @@ def _should_fire_fun(now: datetime.datetime, last_fired: dict) -> bool:
     if last_fired.get("fun") == key:
         return False
     last_fired["fun"] = key
+    return True
+
+
+def _should_fire_challenge(now: datetime.datetime, last_fired: dict) -> bool:
+    """True once per day at CHALLENGE_REPORT_TIME (handles activate, daily DMs, finalize)."""
+    if not CHALLENGE_REPORT_TIME:
+        return False
+    if _hhmm(now) != CHALLENGE_REPORT_TIME:
+        return False
+    key = f"challenge_{now.strftime('%Y-%m-%d')}"
+    if last_fired.get("challenge") == key:
+        return False
+    last_fired["challenge"] = key
     return True
 
 
@@ -164,6 +178,14 @@ def main():
                     post_fun_category(chosen, scores, session)
             except Exception:
                 logger.exception("Fun standings failed:")
+
+        # ── Tick challenge system (activate, daily DMs, finalize) ──────────────
+        if _should_fire_challenge(now, last_leaderboard_fired):
+            logger.info("⚔️  Ticking challenge system...")
+            try:
+                tick_challenges(session)
+            except Exception:
+                logger.exception("Challenge tick failed:")
 
         time.sleep(TICK_SECONDS)
 

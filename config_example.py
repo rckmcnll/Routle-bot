@@ -115,6 +115,70 @@ LOG_BACKUP_COUNT = 3           # Number of rotated backup files to keep (e.g. bo
 API_TIMEOUT = 20   # Seconds before a Bluesky API request times out
 API_RETRIES = 3    # Attempts on transient errors (timeouts, connection resets) before giving up
 
+# ── Head-to-Head Challenge settings ──────────────────────────────────────────
+
+# File that stores all challenge state (created automatically)
+CHALLENGES_FILE = "challenges.json"
+
+# Characters in a generated invite code (uppercase alphanum, no ambiguous 0/O/1/I/L)
+CHALLENGE_CODE_LENGTH = 6
+
+# Maximum participants per challenge (set to None for unlimited)
+CHALLENGE_MAX_PARTICIPANTS = 20
+
+# Time of day (HH:MM, 24h local) to run the challenge tick:
+#   - activates challenges that start today
+#   - sends daily standings DMs to all participants
+#   - finalizes challenges that ended yesterday and sends the final report
+# Set to None to disable (challenges will never activate automatically).
+# Tip: set slightly after LEADERBOARD_TIME so daily scores are fully ingested.
+CHALLENGE_REPORT_TIME = "10:30"
+
+# Number of best daily scores that count toward the final ranking (of 7 days).
+# DNF counts as 7 for challenge ranking purposes.
+CHALLENGE_BEST_OF = 5
+
+# Messages sent when a player creates a challenge. {code} is the invite code.
+CHALLENGE_CREATED_MESSAGES = [
+    "Challenge accepted! Your invite code is {code} — valid for 24 hours. "
+    "Share it with your rivals and tell them to DM it to me. "
+    "Contest starts tomorrow and runs for 7 days. Best 5 of 7 scores wins. 🚊",
+    "Oh, you want beef? Your challenge code is {code}. "
+    "Send it to whoever thinks they can out-Routle you. "
+    "Registration closes at midnight, contest kicks off tomorrow. 🚌",
+    "A challenger appears! Code: {code} — good for 24 hours. "
+    "Rope in your fellow transit nerds. Best 5 of 7 scores wins. 🚋",
+    "Your duel is registered. Invite code: {code}. "
+    "Share it around — anyone who DMs me that code joins the fun. "
+    "Week-long battle starts tomorrow, daily standings delivered here. 🗺️",
+]
+
+# Messages sent when a player joins a challenge. {code} is the invite code.
+CHALLENGE_JOINED_MESSAGES = [
+    "You're in! Challenge {code} starts tomorrow — I'll DM you standings each day. "
+    "Best 5 of 7 scores wins. 🚊",
+    "Tickets punched! You've joined challenge {code}. "
+    "Runs for 7 days starting tomorrow, daily standings in your DMs. 🚌",
+    "Boarded! You're registered for challenge {code}. "
+    "Starts tomorrow, standings delivered daily. Best of luck! 🚋",
+]
+
+# Sent when an invite code is not found or the challenge is complete.
+CHALLENGE_NOT_FOUND_MESSAGE = (
+    "Hmm, I don't recognize that code. It may have expired or been mistyped — "
+    "codes are valid for 24 hours. Ask your challenger for a fresh one!"
+)
+
+# Sent when a challenge has reached CHALLENGE_MAX_PARTICIPANTS.
+CHALLENGE_FULL_MESSAGE = (
+    "Sorry, that challenge is already full. Ask them to start a new one!"
+)
+
+# Sent when the player is already enrolled in that challenge.
+CHALLENGE_ALREADY_IN_MESSAGE = (
+    "You're already registered for that challenge — starts tomorrow!"
+)
+
 # ── Reaction messages ──────────────────────────────────────────────────────────
 # Edit these freely — they're posted as replies to players' score posts.
 #
