@@ -1995,6 +1995,7 @@ def tick_challenges(session: dict) -> None:
         # 1. Activate
         if state == "registering" and ch["start_date"] == today:
             ch["status"] = "active"
+            state = "active"   # re-read so steps 2 & 3 see the updated status
             changed = True
             logger.info("Challenge %s is now ACTIVE (started %s).", code, today)
             _notify_challenge_start(ch, session)
@@ -2355,9 +2356,37 @@ def check_dms_for_optouts(session: dict, dry_run: bool = False) -> list[str]:
     return newly_opted_out
 
 
+def _build_facets(text: str) -> list:
+    """
+    Scan text for URLs and return a list of AT Protocol facets that make
+    each URL a clickable link in Bluesky DMs and posts.
+    Byte offsets are used as required by the lexicon.
+    """
+    url_re = re.compile(r'https?://[^\s]+')
+    encoded = text.encode("utf-8")
+    facets = []
+    for m in url_re.finditer(text):
+        # Convert character positions to UTF-8 byte positions
+        byte_start = len(text[:m.start()].encode("utf-8"))
+        byte_end   = len(text[:m.end()].encode("utf-8"))
+        facets.append({
+            "index": {
+                "$type": "app.bsky.richtext.facet#byteSlice",
+                "byteStart": byte_start,
+                "byteEnd":   byte_end,
+            },
+            "features": [{
+                "$type": "app.bsky.richtext.facet#link",
+                "uri": m.group(),
+            }],
+        })
+    return facets
+
+
 def send_dm(session: dict, to_handle: str, text: str) -> bool:
     """
     Send a DM to a specific handle. Returns True on success.
+    URLs in the text are automatically converted to clickable facets.
     Requires the App Password to have DM access enabled.
     """
     token = session["accessJwt"]
@@ -2376,11 +2405,15 @@ def send_dm(session: dict, to_handle: str, text: str) -> bool:
         )
         resp.raise_for_status()
         convo_id = resp.json()["convo"]["id"]
-        # Send message
+        # Build message payload — attach facets if any URLs are present
+        message: dict = {"text": text}
+        facets = _build_facets(text)
+        if facets:
+            message["facets"] = facets
         requests.post(
             f"{CHAT_URL}/chat.bsky.convo.sendMessage",
             headers=headers,
-            json={"convoId": convo_id, "message": {"text": text}},
+            json={"convoId": convo_id, "message": message},
         ).raise_for_status()
         return True
     except Exception as e:
@@ -3029,9 +3062,11 @@ def _post_and_print(label: str, text: str, session: dict, dry_run: bool,
             if NOTIFY_HANDLE:
                 rkey = uri.split("/")[-1] if uri else ""
                 post_url = f"https://bsky.app/profile/{BOT_HANDLE}/post/{rkey}" if rkey else ""
-                dm_text = f"📋 {label} standings posted!"
+                # Use the human-readable fun category title if label is a raw key
+                _display_label = _FUN_CATEGORIES[label][0] if label in _FUN_CATEGORIES else label
+                dm_text = f"📋 {_display_label} standings posted!"
                 if post_url:
-                    dm_text += f"\n{post_url}"
+                    dm_text += f"\n\n{post_url}"
                 send_dm(session, NOTIFY_HANDLE, dm_text)
                 logger.info("📨 Notified @%s", NOTIFY_HANDLE)
             # Pin post to bot profile if configured and allowed
