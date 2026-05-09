@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 VENV_DIR="$SCRIPT_DIR/.venv"
-LOG_FILE="$SCRIPT_DIR/$(python3 -c "import sys; sys.path.insert(0,'$SCRIPT_DIR'); import config; print(getattr(config,'LOG_FILE','bot.log'))" 2>/dev/null || echo "bot.log")"
+LOG_FILE="$SCRIPT_DIR/$(python3 -c "import sys; sys.path.insert(0,'$SCRIPT_DIR'); import config; print(getattr(config,'LOG_FILE','logs/bot.log'))" 2>/dev/null || echo "logs/bot.log")"
 PID_FILE="$SCRIPT_DIR/bot.pid"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -36,6 +36,9 @@ install_deps() {
     pip install --quiet --upgrade pip
     pip install --quiet requests
     success "Dependencies installed."
+    info "Creating data and logs directories..."
+    mkdir -p "$SCRIPT_DIR/data" "$SCRIPT_DIR/logs"
+    success "Directories ready (data/, logs/)."
 }
 
 check_config() {
@@ -163,6 +166,7 @@ cmd_start() {
     fi
 
     ensure_venv
+    mkdir -p "$SCRIPT_DIR/data" "$SCRIPT_DIR/logs"
     info "Starting scheduler in the background..."
     nohup python3 run_scheduler.py > /dev/null 2>&1 &
     echo $! > "$PID_FILE"

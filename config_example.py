@@ -98,16 +98,17 @@ NOTIFY_HANDLE = ""
 # Set to "" to disable list management
 ROUTLERS_LIST_URI = ""
 
-SCORES_FILE   = "scores.json"
-ACES_FILE     = "aces.json"           # All-time ace counts per player
-STREAKS_FILE  = "streaks.json"        # Consecutive daily play streaks
-OPTOUTS_FILE       = "optouts.json"        # Handles that have DM'd STOP
-KNOWN_PLAYERS_FILE = "known_players.json"  # Players already added to the Routlers list
-DNF_COUNTS_FILE    = "dnf_counts.json"     # All-time DNF counts per player
-RECORDS_FILE       = "records.json"        # Community records (player count highs etc.)
+SCORES_FILE        = "data/scores.json"
+ACES_FILE          = "data/aces.json"           # All-time ace counts per player
+STREAKS_FILE       = "data/streaks.json"        # Consecutive daily play streaks
+OPTOUTS_FILE       = "data/optouts.json"        # Handles that have DM'd STOP
+KNOWN_PLAYERS_FILE = "data/known_players.json"  # Players already added to the Routlers list
+DNF_COUNTS_FILE    = "data/dnf_counts.json"     # All-time DNF counts per player
+RECORDS_FILE       = "data/records.json"        # Community records (player count highs etc.)
+FUN_HISTORY_FILE   = "data/fun_history.json"    # Last posted date per fun category
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-LOG_FILE         = "bot.log"   # Path to the rotating log file
+LOG_FILE         = "logs/bot.log"   # Path to the rotating log file
 LOG_LEVEL        = "INFO"      # DEBUG | INFO | WARNING | ERROR
 LOG_BACKUP_COUNT = 3           # Number of rotated backup files to keep (e.g. bot.log.1 … .3)
 
@@ -118,7 +119,7 @@ API_RETRIES = 3    # Attempts on transient errors (timeouts, connection resets) 
 # ── Head-to-Head Challenge settings ──────────────────────────────────────────
 
 # File that stores all challenge state (created automatically)
-CHALLENGES_FILE = "challenges.json"
+CHALLENGES_FILE = "data/challenges.json"
 
 # Characters in a generated invite code (uppercase alphanum, no ambiguous 0/O/1/I/L)
 CHALLENGE_CODE_LENGTH = 6
