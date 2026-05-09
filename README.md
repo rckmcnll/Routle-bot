@@ -6,6 +6,13 @@ Built for the [Portland TriMet Routle community](https://bsky.app/profile/pdxrou
 
 ---
 
+## What's new in v6.5
+
+### Head-to-head challenges
+Players can now challenge each other to private 1-week tournaments entirely via DM. The bot handles the full lifecycle: invite code generation, a ready-to-forward invite message, accept notifications to the creator, daily standings DMs to all participants throughout the week, and a final report with champion on conclusion. Scoring uses best-of-5-of-7 days (configurable), with DNF counting as 7. Late joiners are supported — only scores from their join date onward count. Two new DM commands: `CHALLENGE` to start a contest, `MYSTATUS` to check active challenges and current rank.
+
+---
+
 ## Features
 
 ### Daily leaderboard
