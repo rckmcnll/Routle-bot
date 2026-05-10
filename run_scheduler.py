@@ -15,6 +15,8 @@ Run with:  python run_scheduler.py
 Background: nohup python run_scheduler.py > bot.log 2>&1 &
 """
 
+import os
+import json
 import time
 import datetime
 import logging
@@ -29,6 +31,31 @@ logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 15   # Main loop resolution — how often we check timers
 
+# Persists last-fired keys across restarts so catch-up logic works correctly.
+SCHEDULER_STATE_FILE = "data/scheduler_state.json"
+
+
+# ─── Scheduler state persistence ──────────────────────────────────────────────
+
+def _load_state() -> dict:
+    """Load last_fired dict from disk, or return empty dict if missing."""
+    if os.path.exists(SCHEDULER_STATE_FILE):
+        try:
+            with open(SCHEDULER_STATE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_state(last_fired: dict) -> None:
+    """Atomically persist last_fired dict to disk."""
+    os.makedirs(os.path.dirname(SCHEDULER_STATE_FILE), exist_ok=True)
+    _tmp = SCHEDULER_STATE_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(last_fired, f, indent=2)
+    os.replace(_tmp, SCHEDULER_STATE_FILE)
+
 
 # ─── Leaderboard scheduler helpers ────────────────────────────────────────────
 
@@ -37,7 +64,10 @@ def _hhmm(dt: datetime.datetime) -> str:
 
 
 def _should_fire(now: datetime.datetime, last_fired: dict, period: str) -> bool:
-    """True if this period should post right now and hasn't already this window."""
+    """
+    True if this period should post right now and hasn't already this window.
+    Fires at the exact configured minute only.
+    """
     if _hhmm(now) != LEADERBOARD_TIME:
         return False
 
@@ -63,6 +93,96 @@ def _should_fire(now: datetime.datetime, last_fired: dict, period: str) -> bool:
 
     last_fired[period] = key
     return True
+
+
+def _catchup_check(now: datetime.datetime, last_fired: dict) -> list[tuple[str, str]]:
+    """
+    On startup (or any tick), detect schedules that were missed while the bot
+    was offline and return a list of (period, ref_date) tuples to fire.
+
+    Rules:
+      - Only fires if we are PAST the scheduled time today (not before it).
+      - Only fires for the most recent missed window — does not replay history.
+      - Respects day boundaries: if the missed window was yesterday (e.g. bot
+        restarts just after midnight), uses yesterday's ref date.
+      - Never fires a period that already has its current-window key recorded.
+    """
+    today     = now.date()
+    hhmm_now  = _hhmm(now)
+    to_fire   = []
+
+    # ── Daily ─────────────────────────────────────────────────────────────────
+    # Missed if: past LEADERBOARD_TIME today AND today's key not in last_fired.
+    daily_key = today.isoformat()
+    if hhmm_now > LEADERBOARD_TIME and last_fired.get("daily") != daily_key:
+        to_fire.append(("daily", today.isoformat()))
+        last_fired["daily"] = daily_key
+
+    # ── Weekly ────────────────────────────────────────────────────────────────
+    # Only catch up if today IS the weekly leaderboard day and we're past the
+    # scheduled time, OR today is past that day and the most recent occurrence
+    # hasn't been recorded yet. Never fires on a non-weekly day mid-week.
+    days_since = (today.weekday() - WEEKLY_LEADERBOARD_DAY) % 7
+    last_weekly_day = today - datetime.timedelta(days=days_since)
+    weekly_key = last_weekly_day.strftime("%Y-W%W")
+    if last_fired.get("weekly") != weekly_key:
+        # Only catch up if the missed day was today (and past time) or yesterday.
+        # Anything older than 1 day we skip — too stale to be useful.
+        days_old = (today - last_weekly_day).days
+        if days_old == 0 and hhmm_now > LEADERBOARD_TIME:
+            to_fire.append(("weekly", last_weekly_day.isoformat()))
+            last_fired["weekly"] = weekly_key
+        elif days_old == 1:
+            to_fire.append(("weekly", last_weekly_day.isoformat()))
+            last_fired["weekly"] = weekly_key
+
+    # ── Monthly ───────────────────────────────────────────────────────────────
+    # Fires on the 1st; ref_date is the last day of the prior month.
+    if today.day == 1 and hhmm_now > LEADERBOARD_TIME:
+        monthly_key = today.strftime("%Y-%m")
+        if last_fired.get("monthly") != monthly_key:
+            ref = (today - datetime.timedelta(days=1)).isoformat()
+            to_fire.append(("monthly", ref))
+            last_fired["monthly"] = monthly_key
+    elif today.day > 1:
+        # If the 1st was missed entirely (bot was down all of the 1st),
+        # fire now using the last day of last month as ref.
+        first_this_month = today.replace(day=1)
+        monthly_key = first_this_month.strftime("%Y-%m")
+        last_of_prev = (first_this_month - datetime.timedelta(days=1)).isoformat()
+        if last_fired.get("monthly") != monthly_key:
+            to_fire.append(("monthly", last_of_prev))
+            last_fired["monthly"] = monthly_key
+
+    # ── Yearly ────────────────────────────────────────────────────────────────
+    yearly_key = str(today.year)
+    if today.month == 1 and today.day == 1 and hhmm_now > LEADERBOARD_TIME:
+        if last_fired.get("yearly") != yearly_key:
+            ref = datetime.date(today.year - 1, 12, 31).isoformat()
+            to_fire.append(("yearly", ref))
+            last_fired["yearly"] = yearly_key
+    elif not (today.month == 1 and today.day == 1):
+        # If Jan 1st was missed, fire once on the next startup.
+        if last_fired.get("yearly") != yearly_key:
+            ref = datetime.date(today.year - 1, 12, 31).isoformat()
+            to_fire.append(("yearly", ref))
+            last_fired["yearly"] = yearly_key
+
+    # ── Fun standings ─────────────────────────────────────────────────────────
+    if FUN_STANDINGS_TIME:
+        fun_key = f"fun_{today.isoformat()}"
+        if hhmm_now > FUN_STANDINGS_TIME and last_fired.get("fun") != fun_key:
+            to_fire.append(("fun", today.isoformat()))
+            last_fired["fun"] = fun_key
+
+    # ── Challenge tick ────────────────────────────────────────────────────────
+    if CHALLENGE_REPORT_TIME:
+        ch_key = f"challenge_{today.isoformat()}"
+        if hhmm_now > CHALLENGE_REPORT_TIME and last_fired.get("challenge") != ch_key:
+            to_fire.append(("challenge", today.isoformat()))
+            last_fired["challenge"] = ch_key
+
+    return to_fire
 
 
 def _ref_date_for(period: str, now: datetime.datetime) -> str:
@@ -119,11 +239,36 @@ def main():
     session = login(BOT_HANDLE, BOT_PASSWORD)
     logger.info("✓ Logged in as @%s", BOT_HANDLE)
 
-    last_leaderboard_fired: dict[str, str] = {}
+    # Load persisted state so catch-up logic has a reliable baseline
+    last_leaderboard_fired: dict[str, str] = _load_state()
     last_poll_time:   datetime.datetime | None = None
     last_reauth_time: datetime.datetime        = datetime.datetime.now()
     poll_interval  = datetime.timedelta(minutes=POLL_INTERVAL_MINUTES)
     reauth_interval = datetime.timedelta(hours=6)   # proactive token refresh
+
+    # ── Catch-up: fire any schedules missed while the bot was offline ──────────
+    now = datetime.datetime.now()
+    missed = _catchup_check(now, last_leaderboard_fired)
+    if missed:
+        logger.info("⏰ Catching up %d missed schedule(s):", len(missed))
+        for period, ref in missed:
+            logger.info("   → %s (ref=%s)", period, ref)
+            try:
+                if period == "fun":
+                    scores = load_scores()
+                    chosen = pick_fun_category(now, scores)
+                    if chosen:
+                        logger.info("🎲 Catch-up fun standings: %s", chosen)
+                        post_fun_category(chosen, scores, session)
+                elif period == "challenge":
+                    tick_challenges(session)
+                else:
+                    run(post_date=ref, period=period)
+            except Exception:
+                logger.exception("Catch-up failed for %s (ref=%s):", period, ref)
+        _save_state(last_leaderboard_fired)
+    else:
+        logger.info("✓ No missed schedules detected.")
 
     while True:
         now = datetime.datetime.now()
@@ -159,12 +304,14 @@ def main():
                     logger.exception("Re-auth also failed. Will retry next tick.")
 
         # ── Fire leaderboards on schedule ──────────────────────────────────────
+        state_changed = False
         for period in ("daily", "weekly", "monthly", "yearly"):
             if _should_fire(now, last_leaderboard_fired, period):
                 ref = _ref_date_for(period, now)
                 logger.info("🔔 Firing %s leaderboard (ref=%s)", period, ref)
                 try:
                     run(post_date=ref, period=period)
+                    state_changed = True
                 except Exception:
                     logger.exception("%s leaderboard failed:", period)
 
@@ -176,6 +323,7 @@ def main():
                 if chosen:
                     logger.info("🎲 Posting fun standings: %s", chosen)
                     post_fun_category(chosen, scores, session)
+                state_changed = True
             except Exception:
                 logger.exception("Fun standings failed:")
 
@@ -184,8 +332,13 @@ def main():
             logger.info("⚔️  Ticking challenge system...")
             try:
                 tick_challenges(session)
+                state_changed = True
             except Exception:
                 logger.exception("Challenge tick failed:")
+
+        # Persist state after any schedule fires so restarts have a fresh baseline
+        if state_changed:
+            _save_state(last_leaderboard_fired)
 
         time.sleep(TICK_SECONDS)
 

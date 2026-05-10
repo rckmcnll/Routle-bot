@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v6.5.1
+# 🚌 Routle Bot — v6.5
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, follows new players, and supports a full suite of player DM commands.
 
@@ -71,13 +71,14 @@ Ad-hoc novelty categories posted on demand as a threaded reply chain, each with 
 
 **Streaks** (minimum 3 consecutive days) — `ace_streak`, `no_dnf_streak`, `sub3_streak` (scores 1–2), `struggle_streak` (scores 4–5 or DNF).
 
-**Yahtzee-style** (all require consecutive calendar days, no DNFs except Straight which is implicitly DNF-safe):
+**Yahtzee-style** (all require consecutive calendar days, no DNFs):
 - `three_kind` — 3 identical scores on 3 consecutive days
 - `four_kind` — 4 identical scores on 4 consecutive days (four-of-a-kind windows excluded from three-of-a-kind count)
-- `full_house` — all 5 score values (1–5) across 5 consecutive days
-- `straight` — scores 1, 2, 3, 4, 5 in any order across 5 consecutive days
+- `full_house` — 3 of one score + 2 of another across 5 consecutive days
+- `small_straight` — four consecutive score values (1–2–3–4 or 2–3–4–5) in any order across 4 consecutive days
+- `large_straight` — all five score values (1–2–3–4–5) in any order across 5 consecutive days
 - `yahtzee` — 5 identical scores on 5 consecutive days
-- `full_card` — players who have achieved at least one of every Yahtzee category, ranked by total combined hits
+- `full_card` — players who have achieved at least one of all six Yahtzee categories, ranked by total combined hits
 
 All Yahtzee categories use non-overlapping windows (10 consecutive aces = 2 Yahtzees).
 
@@ -248,6 +249,8 @@ help             Show help
 ./run_bot.sh standings fun --dry-run          # preview
 ./run_bot.sh standings dow_tuesday            # Tuesday standings only
 ./run_bot.sh standings yahtzee                # Yahtzee Club only
+./run_bot.sh standings small_straight         # Small Straight only
+./run_bot.sh standings large_straight         # Large Straight only
 ./run_bot.sh standings full_card              # Full Scorecard Club
 ./run_bot.sh standings struggle_streak        # Struggle Bus Streak
 ./run_bot.sh standings dnf_royalty            # DNF leaderboard only
@@ -409,21 +412,22 @@ Sending `hist` or `history` triggers a DM with all scores for the current year, 
 
 #### Yahtzee card
 
-Sending `yahtzee` triggers a DM with the player's personal Yahtzee scorecard. Each category shows count and most recent date achieved:
+Sending `yahtzee` triggers a DM with the player's personal Yahtzee scorecard. Each of the six categories shows count and most recent date achieved:
 
 ```
 🎲 Routle Yahtzee Card — @𝚠𝚒𝚕𝚕𝚘𝚠𝚊𝚜𝚑𝚖𝚊𝚙𝚕𝚎
 
 ⚀ Three of a Kind: 𝟺× (last 4/20)
 ⚁ Four of a Kind: 𝟸× (last 4/20)
-⚂ Full House: —
-⚃ The Straight: —
-⚄ Yahtzee!: —
+⚂ Full House: 𝟷× (last 4/18)
+⚃ Small Straight: —
+⚄ Large Straight: —
+⚅ Yahtzee!: —
 
-2/5 categories unlocked. 3 to go!
+3/6 categories unlocked. 3 to go!
 ```
 
-Players with all five categories unlocked receive a special full scorecard message.
+Players with all six categories unlocked receive a special full scorecard message.
 
 ---
 

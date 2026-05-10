@@ -36,9 +36,72 @@ install_deps() {
     pip install --quiet --upgrade pip
     pip install --quiet requests
     success "Dependencies installed."
-    info "Creating data and logs directories..."
+    _setup_dirs
+}
+
+_setup_dirs() {
+    info "Creating data/ and logs/ directories..."
     mkdir -p "$SCRIPT_DIR/data" "$SCRIPT_DIR/logs"
-    success "Directories ready (data/, logs/)."
+    success "Directories ready."
+
+    # Initialise empty data files so the bot starts cleanly
+    local data="$SCRIPT_DIR/data"
+    for f in scores.json aces.json streaks.json optouts.json               known_players.json dnf_counts.json records.json               fun_history.json challenges.json reactions.json; do
+        if [[ ! -f "$data/$f" ]]; then
+            # optouts and reactions are arrays; everything else is an object
+            if [[ "$f" == "optouts.json" || "$f" == "reactions.json" ]]; then
+                echo "[]" > "$data/$f"
+            else
+                echo "{}" > "$data/$f"
+            fi
+            info "Created $data/$f"
+        fi
+    done
+
+    # Pre-populate scheduler_state.json with today'''s keys so no schedules
+    # fire immediately on first start (catch-up would otherwise trigger all of them).
+    local state_file="$data/scheduler_state.json"
+    if [[ ! -f "$state_file" ]]; then
+        info "Writing initial scheduler state..."
+        python3 - << PYEOF
+import json, datetime, sys
+sys.path.insert(0, '$SCRIPT_DIR')
+try:
+    import config as _c
+    leaderboard_day = getattr(_c, 'WEEKLY_LEADERBOARD_DAY', 6)
+    fun_time        = getattr(_c, 'FUN_STANDINGS_TIME', '')
+    challenge_time  = getattr(_c, 'CHALLENGE_REPORT_TIME', None)
+except Exception:
+    leaderboard_day = 6
+    fun_time        = ''
+    challenge_time  = None
+
+today = datetime.date.today()
+
+# Compute the most recent occurrence of the weekly leaderboard day
+days_since = (today.weekday() - leaderboard_day) % 7
+last_weekly = today - datetime.timedelta(days=days_since)
+weekly_key  = last_weekly.strftime('%Y-W%W')
+
+state = {
+    'daily':   today.isoformat(),
+    'weekly':  weekly_key,
+    'monthly': today.strftime('%Y-%m'),
+    'yearly':  str(today.year),
+}
+if fun_time:
+    state['fun'] = f'fun_{today.isoformat()}'
+if challenge_time:
+    state['challenge'] = f'challenge_{today.isoformat()}'
+
+with open('$state_file', 'w') as f:
+    json.dump(state, f, indent=2)
+print(json.dumps(state, indent=2))
+PYEOF
+        success "Scheduler state initialised — no catch-up will fire on first start."
+    else
+        info "Scheduler state already exists — skipping."
+    fi
 }
 
 check_config() {
@@ -166,7 +229,7 @@ cmd_start() {
     fi
 
     ensure_venv
-    mkdir -p "$SCRIPT_DIR/data" "$SCRIPT_DIR/logs"
+    _setup_dirs
     info "Starting scheduler in the background..."
     nohup python3 run_scheduler.py > /dev/null 2>&1 &
     echo $! > "$PID_FILE"

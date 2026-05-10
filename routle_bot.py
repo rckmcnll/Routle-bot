@@ -989,7 +989,7 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         "ace_streak": {}, "no_dnf_streak": {}, "sub3_streak": {}, "struggle_streak": {},
         # Yahtzee
         "yahtzee": {}, "four_kind": {}, "three_kind": {},
-        "full_house": {}, "straight": {},
+        "full_house": {}, "small_straight": {}, "large_straight": {},
         # Comedy
         "dnf_royalty": {}, "eternal_3": {},
         "clutch_rate": {}, "variance": {},
@@ -1005,7 +1005,7 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
     # Tracks the most recent date each yahtzee category was achieved per player
     last_dates: dict[str, dict[str, str]] = {
         "yahtzee": {}, "four_kind": {}, "three_kind": {},
-        "full_house": {}, "straight": {},
+        "full_house": {}, "small_straight": {}, "large_straight": {},
     }
 
     # ── Day-of-week accumulation ───────────────────────────────────────────────
@@ -1127,7 +1127,7 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
             stats["three_kind"][handle] = three
             last_dates["three_kind"][handle] = three_last
 
-        # Full house — all 5 score values (1–5) in any order across 5 consecutive calendar days (DNFs excluded)
+        # Full house — 3 of one score + 2 of another across 5 consecutive calendar days (no DNFs)
         # Non-overlapping: skip past the window on a hit.
         full = 0
         full_last = ""
@@ -1135,33 +1135,54 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         while i <= n - 5:
             if _is_consecutive(dated_scores, i, 5):
                 window = sc_list[i:i+5]
-                if DNF not in window and all(v in window for v in range(1, MAX_SQUARES + 1)):
-                    full += 1
-                    full_last = dated_scores[i + 4][0]
-                    i += 5   # skip past this window
-                    continue
+                if DNF not in window:
+                    counts = sorted([window.count(v) for v in set(window)], reverse=True)
+                    if counts == [3, 2]:
+                        full += 1
+                        full_last = dated_scores[i + 4][0]
+                        i += 5   # skip past this window
+                        continue
             i += 1
         if full:
             stats["full_house"][handle] = full
             last_dates["full_house"][handle] = full_last
 
-        # Straight — all 5 values (1–5) in any order across 5 consecutive calendar days
-        # Non-overlapping: skip past the window on a hit. DNF implicitly excluded (sorted != [1-5]).
-        straight = 0
-        straight_last = ""
+        # Small straight — 4 of {1,2,3,4} or {2,3,4,5} in any order across 4 consecutive calendar days (no DNFs)
+        # Non-overlapping: skip past the window on a hit.
+        small_str = 0
+        small_str_last = ""
+        _small_straights = ({1, 2, 3, 4}, {2, 3, 4, 5})
+        i = 0
+        while i <= n - 4:
+            if _is_consecutive(dated_scores, i, 4):
+                window = sc_list[i:i+4]
+                if DNF not in window and set(window) in _small_straights:
+                    small_str += 1
+                    small_str_last = dated_scores[i + 3][0]
+                    i += 4   # skip past this window
+                    continue
+            i += 1
+        if small_str:
+            stats["small_straight"][handle] = small_str
+            last_dates["small_straight"][handle] = small_str_last
+
+        # Large straight — all 5 values (1,2,3,4,5) in any order across 5 consecutive calendar days (no DNFs)
+        # Non-overlapping: skip past the window on a hit.
+        large_str = 0
+        large_str_last = ""
         i = 0
         while i <= n - 5:
             if _is_consecutive(dated_scores, i, 5):
                 window = sc_list[i:i+5]
-                if sorted(window) == list(range(1, MAX_SQUARES + 1)):
-                    straight += 1
-                    straight_last = dated_scores[i + 4][0]
+                if DNF not in window and set(window) == {1, 2, 3, 4, 5}:
+                    large_str += 1
+                    large_str_last = dated_scores[i + 4][0]
                     i += 5   # skip past this window
                     continue
             i += 1
-        if straight:
-            stats["straight"][handle] = straight
-            last_dates["straight"][handle] = straight_last
+        if large_str:
+            stats["large_straight"][handle] = large_str
+            last_dates["large_straight"][handle] = large_str_last
 
     # ── Comedy ────────────────────────────────────────────────────────────────
     for handle, dated_scores in dated.items():
@@ -1200,7 +1221,7 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
     # ── Full card — players who have achieved all 5 Yahtzee categories ────────
     # Value = total count of all five category occurrences combined (more = more dominant)
     # Only players with at least 1 of each of the 5 categories qualify.
-    _yahtzee_cats = ("yahtzee", "four_kind", "three_kind", "full_house", "straight")
+    _yahtzee_cats = ("yahtzee", "four_kind", "three_kind", "full_house", "small_straight", "large_straight")
     all_handles = {h for cat in _yahtzee_cats for h in stats[cat]}
     for handle in all_handles:
         if all(handle in stats[cat] for cat in _yahtzee_cats):
@@ -1322,11 +1343,13 @@ _FUN_CATEGORIES: dict[str, tuple] = {
     "three_kind":    ("Three of a Kind",     "🎲", True,  "{}×",  1,
         "🎲 Methodology: three identical scores on three consecutive calendar days. No DNFs. A coincidence the first time. A lifestyle after that."),
     "full_house":    ("Full House",          "🎲", True,  "{}×",  1,
-        "🎲 Methodology: all five score values (1–5) in any order across five consecutive calendar days. No DNFs. A complete emotional journey in one work week."),
-    "straight":      ("The Straight",        "🎲", True,  "{}×",  1,
-        "🎲 Methodology: scores of 1, 2, 3, 4, and 5 — all five values, any order — across five consecutive calendar days. No DNFs. A perfectly balanced week, as all things should be."),
+        "🎲 Methodology: three of one score and two of another across five consecutive calendar days. No DNFs. Like showing up with a plan and a backup plan. Balanced. Prepared. Slightly smug."),
+    "small_straight": ("Small Straight",     "🎲", True,  "{}×",  1,
+        "🎲 Methodology: four consecutive score values — either 1,2,3,4 or 2,3,4,5 — in any order across four consecutive calendar days. No DNFs. Four stops in a row. The express lane of Routle achievement."),
+    "large_straight": ("Large Straight",     "🎲", True,  "{}×",  1,
+        "🎲 Methodology: all five score values (1,2,3,4,5) in any order across five consecutive calendar days. No DNFs. A complete tour of the scoring range in one work week. You've seen it all. You've done it all. The route has no secrets left."),
     "full_card":     ("Full Scorecard Club", "🎊", True,  "{}pts", 1,
-        "🎊 Methodology: players who have achieved at least one of every Yahtzee category (Three of a Kind, Four of a Kind, Full House, Straight, and Yahtzee). Ranked by total combined hits across all five. This is an extremely short list. Probably."),
+        "🎊 Methodology: players who have achieved at least one of every Yahtzee category (Three of a Kind, Four of a Kind, Full House, Small Straight, Large Straight, and Yahtzee). Ranked by total combined hits across all six. This is an extremely short list. Probably."),
     "part_time":     ("Part-Time Commuters",  "🎟️", True,  "⌀{}gp/wk", 0,
         "🎟️ Methodology: players averaging between 1 and 3 games per week over the last 28 days — less than half the week. Not every day, but reliably there. The bus doesn't need to know your full schedule. It just needs to see you sometimes."),
     "the_regulars":  ("The Regulars",         "🚍", True,  "⌀{}gp/wk", 0,
@@ -1561,11 +1584,12 @@ def format_player_yahtzee(handle: str, scores: dict) -> str:
 
     # (die_face, category_key, label)
     scorecard = [
-        ("⚀", "three_kind", "Three of a Kind"),
-        ("⚁", "four_kind",  "Four of a Kind"),
-        ("⚂", "full_house", "Full House"),
-        ("⚃", "straight",   "The Straight"),
-        ("⚄", "yahtzee",    "Yahtzee!"),
+        ("⚀", "three_kind",     "Three of a Kind"),
+        ("⚁", "four_kind",      "Four of a Kind"),
+        ("⚂", "full_house",     "Full House"),
+        ("⚃", "small_straight", "Small Straight"),
+        ("⚄", "large_straight", "Large Straight"),
+        ("⚅", "yahtzee",        "Yahtzee!"),
     ]
 
     lines = [f"🎲 {GAME_NAME} Yahtzee Card — @{_mono(short)}", ""]
@@ -1589,15 +1613,15 @@ def format_player_yahtzee(handle: str, scores: dict) -> str:
     lines.append("")
     total = len(achieved)
 
-    if total == 5:
+    if total == 6:
         # Full scorecard — special reward
         lines.append("🎊 FULL SCORECARD! You've hit every category.")
         lines.append("You are the dice. The dice are you. 🚌🎲")
     elif total == 0:
         lines.append("No categories yet — keep rolling! 🎲")
     else:
-        remaining = 5 - total
-        lines.append(f"{total}/5 categories unlocked. {remaining} to go!")
+        remaining = 6 - total
+        lines.append(f"{total}/6 categories unlocked. {remaining} to go!")
 
     return "\n".join(lines)
 
@@ -2734,14 +2758,15 @@ def make_score_post(handle: str, display_name: str, score: int,
 
 # ─── Yahtzee achievement detection ────────────────────────────────────────────
 
-_YAHTZEE_CATS = ("three_kind", "four_kind", "full_house", "straight", "yahtzee")
+_YAHTZEE_CATS = ("three_kind", "four_kind", "full_house", "small_straight", "large_straight", "yahtzee")
 
 _YAHTZEE_CAT_LABELS = {
-    "three_kind": ("⚀", "Three of a Kind"),
-    "four_kind":  ("⚁", "Four of a Kind"),
-    "full_house": ("⚂", "Full House"),
-    "straight":   ("⚃", "The Straight"),
-    "yahtzee":    ("⚄", "Yahtzee!"),
+    "three_kind":     ("⚀", "Three of a Kind"),
+    "four_kind":      ("⚁", "Four of a Kind"),
+    "full_house":     ("⚂", "Full House"),
+    "small_straight": ("⚃", "Small Straight"),
+    "large_straight": ("⚄", "Large Straight"),
+    "yahtzee":        ("⚅", "Yahtzee!"),
 }
 
 
@@ -2792,17 +2817,29 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
     while i <= n - 5:
         if _consec(i, 5):
             w = sc[i:i+5]
-            if DNF not in w and all(v in w for v in range(1, MAX_SQUARES + 1)):
-                achieved.add("full_house")
-                i += 5; continue
+            if DNF not in w:
+                counts = sorted([w.count(v) for v in set(w)], reverse=True)
+                if counts == [3, 2]:
+                    achieved.add("full_house")
+                    i += 5; continue
+        i += 1
+
+    _small_straights = ({1, 2, 3, 4}, {2, 3, 4, 5})
+    i = 0
+    while i <= n - 4:
+        if _consec(i, 4):
+            w = sc[i:i+4]
+            if DNF not in w and set(w) in _small_straights:
+                achieved.add("small_straight")
+                i += 4; continue
         i += 1
 
     i = 0
     while i <= n - 5:
         if _consec(i, 5):
             w = sc[i:i+5]
-            if sorted(w) == list(range(1, MAX_SQUARES + 1)):
-                achieved.add("straight")
+            if DNF not in w and set(w) == {1, 2, 3, 4, 5}:
+                achieved.add("large_straight")
                 i += 5; continue
         i += 1
 
@@ -2854,11 +2891,11 @@ def make_yahtzee_notification(display_name: str, new_cats: list[str],
 
     if set(_YAHTZEE_CATS) <= all_achieved:
         lines.append("")
-        lines.append("🎊 FULL SCORECARD COMPLETE! All five categories unlocked.")
+        lines.append("🎊 FULL SCORECARD COMPLETE! All six categories unlocked.")
         lines.append("DM YAHTZEE to see your card. You are the dice. 🚌")
     else:
         remaining = len(_YAHTZEE_CATS) - len(all_achieved)
-        lines.append(f"({len(all_achieved)}/5 categories · {remaining} to go — DM YAHTZEE for your card)")
+        lines.append(f"({len(all_achieved)}/6 categories · {remaining} to go — DM YAHTZEE for your card)")
 
     return "\n".join(lines)
 
