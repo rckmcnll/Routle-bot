@@ -80,6 +80,8 @@ CHALLENGE_FULL_MESSAGE       = getattr(_config, "CHALLENGE_FULL_MESSAGE",
 CHALLENGE_ALREADY_IN_MESSAGE = getattr(_config, "CHALLENGE_ALREADY_IN_MESSAGE",
     "You're already registered for that challenge — starts tomorrow!")
 
+REACTIONS_FILE = getattr(_config, "REACTIONS_FILE", "data/reactions.json")
+
 logger = logging.getLogger(__name__)
 
 # ─── Logging setup ─────────────────────────────────────────────────────────────
@@ -336,10 +338,14 @@ def follow_player(session: dict, did: str) -> bool:
     except Exception as e:
         logger.warning("Could not follow %s: %s", did, e)
         return False
-    """Add a DID to a list. Returns True on success, False if already a member."""
+
+
+def add_to_list(session: dict, list_uri: str, member_did: str) -> bool:
+    """Add a DID to a curated list. Returns True on success, False if already a member."""
     now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     try:
-        requests.post(
+        _api_request(
+            "POST",
             f"{BASE_URL}/com.atproto.repo.createRecord",
             json={
                 "repo": session["did"],
@@ -352,7 +358,7 @@ def follow_player(session: dict, did: str) -> bool:
                 },
             },
             headers={"Authorization": f"Bearer {session['accessJwt']}"},
-        ).raise_for_status()
+        )
         return True
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 400:
@@ -1789,6 +1795,26 @@ def format_player_stats(handle: str, scores: dict, aces: dict,
     return "\n".join(lines)
 
 
+# ─── Reaction dedup tracking ──────────────────────────────────────────────────
+
+def load_reactions() -> set:
+    """
+    Load the set of post URIs the bot has already reacted to.
+    Used to prevent duplicate reactions across restarts or concurrent runs.
+    """
+    if os.path.exists(REACTIONS_FILE):
+        with open(REACTIONS_FILE) as f:
+            return set(json.load(f))
+    return set()
+
+
+def save_reactions(reacted: set) -> None:
+    _tmp = REACTIONS_FILE + ".tmp"
+    with open(_tmp, "w") as f:
+        json.dump(sorted(reacted), f, indent=2)
+    os.replace(_tmp, REACTIONS_FILE)
+
+
 # ─── Challenge System ──────────────────────────────────────────────────────────
 # Unambiguous characters for invite codes: no 0/O/1/I/L
 _CODE_CHARS = [c for c in (_string.ascii_uppercase + _string.digits)
@@ -2855,6 +2881,7 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
     streaks = load_streaks()
     optouts = load_optouts()
     known = load_known_players()
+    reacted = load_reactions()
     new_entries = 0
 
     for item in feed:
@@ -2894,6 +2921,14 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
             if _in_quiet_hours():
                 logger.debug("Skipping reaction — quiet hours (%s–%s)", QUIET_HOURS_START, QUIET_HOURS_END)
                 continue
+
+            # Skip if we have already reacted to this exact post (dedup across restarts)
+            post_uri = post_ref["uri"]
+            if post_uri and post_uri in reacted:
+                logger.debug("Skipping reaction — already reacted to %s", post_uri)
+                continue
+            if post_uri:
+                reacted.add(post_uri)
 
             # Games played milestone check (applies to all scores)
             total_games = games_played_count(scores, author)
@@ -2945,6 +2980,7 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
     save_dnf_counts(dnf_counts)
     save_streaks(streaks)
     save_known_players(known)
+    save_reactions(reacted)
     logger.info("%d new result(s) recorded.", new_entries)
     return new_entries
 

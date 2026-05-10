@@ -450,17 +450,21 @@ Streak suffixes (🔥) are appended automatically — no need to add them to mes
 
 All files created automatically on first run. Safe to edit manually.
 
+All data files live in the `data/` subdirectory. Log files live in `logs/`. Both directories are created automatically on `./run_bot.sh install` or `./run_bot.sh start`.
+
 | File | Contents |
 |---|---|
-| `scores.json` | `{"YYYY-MM-DD": {"handle": guess_number}}` |
-| `aces.json` | `{"handle": total_ace_count}` |
-| `streaks.json` | `{"handle": {"current": N, "best": N, "last_date": "YYYY-MM-DD"}}` |
-| `optouts.json` | `["handle", ...]` |
-| `known_players.json` | `{"handle": "did:plc:..."}` |
-| `dnf_counts.json` | `{"handle": total_dnf_count}` |
-| `records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}, "daily_score_1": {...}, ...}` |
-| `fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, enforces the 14-day no-repeat window |
-| `challenges.json` | All challenge state — code, creator, status, start/end dates, participants, last report date. Created automatically on first `CHALLENGE` DM. |
+| `data/scores.json` | `{"YYYY-MM-DD": {"handle": guess_number}}` |
+| `data/aces.json` | `{"handle": total_ace_count}` |
+| `data/streaks.json` | `{"handle": {"current": N, "best": N, "last_date": "YYYY-MM-DD"}}` |
+| `data/optouts.json` | `["handle", ...]` |
+| `data/known_players.json` | `{"handle": "did:plc:..."}` |
+| `data/dnf_counts.json` | `{"handle": total_dnf_count}` |
+| `data/records.json` | `{"daily_players": {"record": N, "date": "..."}, "weekly_players": {...}, "monthly_players": {...}, "new_players_day": {...}, "new_players": {"YYYY-MM-DD": N}, "daily_score_1": {...}, ...}` |
+| `data/fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, enforces the 14-day no-repeat window |
+| `data/challenges.json` | All challenge state — code, creator, status, start/end dates, participants, last report date. Created automatically on first `CHALLENGE` DM. |
+| `data/reactions.json` | Set of post URIs the bot has already reacted to. Prevents duplicate reactions across restarts or concurrent runs. |
+| `logs/bot.log` | Rotating log file (5 MB cap, up to `LOG_BACKUP_COUNT` backups) |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
 
@@ -521,7 +525,19 @@ routle-bot/
 ├── requirements.txt     # Python 3.10+ required; requests>=2.31.0
 ├── .gitignore
 ├── LICENSE              # MIT
-└── README.md
+├── README.md
+├── data/                # All JSON data files (created on first run)
+│   ├── scores.json
+│   ├── aces.json
+│   ├── streaks.json
+│   ├── optouts.json
+│   ├── known_players.json
+│   ├── dnf_counts.json
+│   ├── records.json
+│   ├── fun_history.json
+│   └── challenges.json
+└── logs/                # Rotating log files (created on first run)
+    └── bot.log
 ```
 
 ---

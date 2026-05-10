@@ -120,6 +120,7 @@ API_RETRIES = 3    # Attempts on transient errors (timeouts, connection resets) 
 
 # File that stores all challenge state (created automatically)
 CHALLENGES_FILE = "data/challenges.json"
+REACTIONS_FILE  = "data/reactions.json"    # Post URIs already reacted to (dedup guard)
 
 # Characters in a generated invite code (uppercase alphanum, no ambiguous 0/O/1/I/L)
 CHALLENGE_CODE_LENGTH = 6
