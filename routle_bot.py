@@ -990,6 +990,10 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
         "dow_monday":    {}, "dow_tuesday":  {}, "dow_wednesday": {},
         "dow_thursday":  {}, "dow_friday":   {}, "dow_saturday":  {},
         "dow_sunday":    {},
+        # Games played per player per day-of-week (parallel to dow_* avg stats)
+        "dow_monday_gp":   {}, "dow_tuesday_gp":  {}, "dow_wednesday_gp": {},
+        "dow_thursday_gp": {}, "dow_friday_gp":   {}, "dow_saturday_gp":  {},
+        "dow_sunday_gp":   {},
         # Score count categories
         "score_2": {}, "score_3": {}, "score_4": {}, "score_5": {},
         # Streak & pattern
@@ -1029,6 +1033,7 @@ def compute_fun_stats(scores: dict) -> tuple[dict[str, list], dict[str, dict[str
             non_dnf = [s for s in sc_list if s != DNF]
             if non_dnf:
                 stats[key][handle] = round(sum(non_dnf) / len(non_dnf), 2)
+                stats[f"{key}_gp"][handle] = len(sc_list)
 
     # ── Score count categories (2–5) ───────────────────────────────────────────
     for handle, dated_scores in dated.items():
@@ -1393,6 +1398,16 @@ def format_fun_standings(category: str, scores: dict) -> list[str]:
 
     player_dates = last_dates.get(category) if category in last_dates else None
     rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
+
+    # For dow categories append games-played count to each row's stat column
+    if category.startswith("dow_"):
+        # gp_dict keyed by short handle to match what _rank_rows produces
+        gp_dict = {_short_handle(h): gp for h, gp in all_stats.get(f"{category}_gp", [])}
+        rows = [
+            (rank, handle, f"{stat}  {gp_dict.get(handle, 0)}gp")
+            for rank, handle, stat in rows
+        ]
+
     return _fun_page(title, rows, emoji=emoji, description=desc)
 
 
@@ -1413,6 +1428,12 @@ def format_fun_all(scores: dict, categories: list[str] | None = None) -> dict[st
             continue
         player_dates = last_dates.get(cat) if cat in last_dates else None
         rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
+        if cat.startswith("dow_"):
+            gp_dict = {_short_handle(h): gp for h, gp in all_stats.get(f"{cat}_gp", [])}
+            rows = [
+                (rank, handle, f"{stat}  {gp_dict.get(handle, 0)}gp")
+                for rank, handle, stat in rows
+            ]
         result[cat] = _fun_page(title, rows, emoji=emoji, description=desc)
     return result
 
