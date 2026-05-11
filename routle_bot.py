@@ -546,7 +546,7 @@ def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) 
             # Exclude players below minimum threshold
             if MIN_DAYS_THRESHOLD and days < MIN_DAYS_THRESHOLD:
                 s["rank_key"]   = (999, 0)            # sorts to bottom
-                s["rank_stat"]  = f"({days}d — min {MIN_DAYS_THRESHOLD})"
+                s["rank_stat"]  = f"⌀{s['avg']:.2f}"
                 s["eligible"]   = False
             else:
                 s["rank_key"]   = (round(s["avg"], 4), -days)
@@ -566,9 +566,16 @@ def rank_period_agg(agg: dict, date_keys: list[str], method: str | None = None) 
             n = BEST_OF_N_DAYS or total_days
             best_scores = daily[:n]                   # n lowest (best) scores
             avg = round(sum(best_scores) / len(best_scores), 4) if best_scores else 0
-            s["rank_key"]  = (avg, -days)
-            s["rank_stat"] = f"⌀{avg:.2f} (b{len(best_scores)})"
-            s["eligible"]  = True
+            if days < n:
+                # Player hasn't played enough days to fill the best-N window —
+                # shown in standings but marked ineligible for ranking.
+                s["rank_key"]  = (999, 0)
+                s["rank_stat"] = f"⌀{avg:.2f}"
+                s["eligible"]  = False
+            else:
+                s["rank_key"]  = (avg, -days)
+                s["rank_stat"] = f"⌀{avg:.2f} (b{n})"
+                s["eligible"]  = True
 
         elif effective_method == "weighted":
             # Points = sum(MAX_SQUARES+1 - score) for each day played; DNF = 0 pts
@@ -777,7 +784,7 @@ def format_period_leaderboard(title: str, agg: dict, scores: dict, date_keys: li
     method_note = {
         "avg":           f" · min {MIN_DAYS_THRESHOLD}d to qualify",
         "adjusted":      " · unplayed=DNF",
-        "best_n":        f" · best {BEST_OF_N_DAYS or active_days}/{active_days}d",
+        "best_n":        f" · best {BEST_OF_N_DAYS or active_days}/{active_days}d · min {BEST_OF_N_DAYS or active_days}d to rank",
         "weighted":      " · pts×participation",
         "participation": " · most games played",
     }.get(RANKING_METHOD, "")
@@ -3436,6 +3443,9 @@ def run_standings(
                     root_ref = result
                 prev_ref = result
         return
+    elif period == "weekly":
+        ref = datetime.date.fromisoformat(to_date) if to_date else today
+        pages = format_weekly_leaderboard(ref, scores)
     elif period == "monthly":
         ref = datetime.date.fromisoformat(to_date) if to_date else today
         pages = format_monthly_leaderboard(ref, scores)
