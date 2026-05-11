@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v6.5
+# 🚌 Routle Bot — v6.6
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, follows new players, and supports a full suite of player DM commands.
 
@@ -94,6 +94,28 @@ Multi-page standings use correct Bluesky thread structure (`root` always points 
 
 ### Feed polling
 Polls the feed every N minutes for near-realtime reactions. Leaderboards post on a separate scheduled cadence.
+
+### Missed schedule catch-up
+
+If the bot is offline when a scheduled report is due, it catches up automatically on the next start rather than silently dropping the post.
+
+**How it works:** the scheduler persists a `data/scheduler_state.json` file recording the last-fired key for each schedule (daily, weekly, monthly, yearly, fun standings, challenge tick). On startup, it compares those keys against the current time and fires any that were missed.
+
+**Day boundary rules:**
+
+| Schedule | Catch-up window | Ref date used |
+|---|---|---|
+| Daily | Any time past `LEADERBOARD_TIME` today | Today |
+| Weekly | Same day past `LEADERBOARD_TIME`, or the following day | The missed weekly day |
+| Weekly (2+ days ago) | Not caught up — too stale | — |
+| Monthly | Any time on the 1st, or any later day in the month | Last day of the previous month |
+| Yearly | Any time on Jan 1st, or any later day in the year | Dec 31st of the previous year |
+| Fun standings | Any time past `FUN_STANDINGS_TIME` today | Today |
+| Challenge tick | Any time past `CHALLENGE_REPORT_TIME` today | Today |
+
+The weekly window is deliberately capped at one day — posting a leaderboard from several days ago would be confusing. All other schedules catch up regardless of how long the bot was offline.
+
+**Fresh installs:** `./run_bot.sh install` (and `./run_bot.sh start`) pre-populates `scheduler_state.json` with today's keys so no schedules fire immediately on first run.
 
 ### Head-to-head challenges
 
@@ -468,6 +490,7 @@ All data files live in the `data/` subdirectory. Log files live in `logs/`. Both
 | `data/fun_history.json` | `{"category_key": "YYYY-MM-DD", ...}` — last posted date per fun category, enforces the 14-day no-repeat window |
 | `data/challenges.json` | All challenge state — code, creator, status, start/end dates, participants, last report date. Created automatically on first `CHALLENGE` DM. |
 | `data/reactions.json` | Set of post URIs the bot has already reacted to. Prevents duplicate reactions across restarts or concurrent runs. |
+| `data/scheduler_state.json` | Last-fired key per schedule slot (daily, weekly, monthly, yearly, fun, challenge). Persists across restarts to power the missed schedule catch-up system. Pre-populated by `./run_bot.sh install`. |
 | `logs/bot.log` | Rotating log file (5 MB cap, up to `LOG_BACKUP_COUNT` backups) |
 
 All saves are **atomic** — written to a `.tmp` file then renamed, so a crash mid-write never corrupts live data.
