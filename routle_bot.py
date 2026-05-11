@@ -1397,16 +1397,23 @@ def format_fun_standings(category: str, scores: dict) -> list[str]:
         return [f"{emoji} {GAME_NAME} {title}\n\nNo data yet — keep playing!"]
 
     player_dates = last_dates.get(category) if category in last_dates else None
-    rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
 
-    # For dow categories append games-played count to each row's stat column
     if category.startswith("dow_"):
-        # gp_dict keyed by short handle to match what _rank_rows produces
-        gp_dict = {_short_handle(h): gp for h, gp in all_stats.get(f"{category}_gp", [])}
-        rows = [
-            (rank, handle, f"{stat}  {gp_dict.get(handle, 0)}gp")
-            for rank, handle, stat in rows
-        ]
+        # dow: sort by avg ascending, then games played descending as tiebreaker
+        gp_lookup = dict(all_stats.get(f"{category}_gp", []))  # full handle → gp
+        items_sorted = sorted(items, key=lambda x: (x[1], -gp_lookup.get(x[0], 0)))
+        rows = []
+        prev_key = None
+        rank = 0
+        for i, (handle, val) in enumerate(items_sorted):
+            gp = gp_lookup.get(handle, 0)
+            sort_key = (val, -gp)
+            if sort_key != prev_key:
+                rank = i + 1
+                prev_key = sort_key
+            rows.append((f"{rank}.", _short_handle(handle), f"{fmt.format(val)}  {gp}gp"))
+    else:
+        rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
 
     return _fun_page(title, rows, emoji=emoji, description=desc)
 
@@ -1427,13 +1434,21 @@ def format_fun_all(scores: dict, categories: list[str] | None = None) -> dict[st
         if not items:
             continue
         player_dates = last_dates.get(cat) if cat in last_dates else None
-        rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
         if cat.startswith("dow_"):
-            gp_dict = {_short_handle(h): gp for h, gp in all_stats.get(f"{cat}_gp", [])}
-            rows = [
-                (rank, handle, f"{stat}  {gp_dict.get(handle, 0)}gp")
-                for rank, handle, stat in rows
-            ]
+            gp_lookup = dict(all_stats.get(f"{cat}_gp", []))
+            items_sorted = sorted(items, key=lambda x: (x[1], -gp_lookup.get(x[0], 0)))
+            rows = []
+            prev_key = None
+            rank = 0
+            for i, (handle, val) in enumerate(items_sorted):
+                gp = gp_lookup.get(handle, 0)
+                sort_key = (val, -gp)
+                if sort_key != prev_key:
+                    rank = i + 1
+                    prev_key = sort_key
+                rows.append((f"{rank}.", _short_handle(handle), f"{fmt.format(val)}  {gp}gp"))
+        else:
+            rows = _rank_rows(items, fmt=fmt, higher_is_better=higher, player_dates=player_dates)
         result[cat] = _fun_page(title, rows, emoji=emoji, description=desc)
     return result
 
