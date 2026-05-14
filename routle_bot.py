@@ -2813,10 +2813,33 @@ _YAHTZEE_CAT_LABELS = {
 }
 
 
-def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
+# Score value → die pip emoji (1=lowest, 5=highest, DNF=skull)
+_SCORE_DIE = {1: "⚀", 2: "⚁", 3: "⚂", 4: "⚃", 5: "⚄"}
+
+
+def _day_abbr(date_str: str) -> str:
+    """Return 3-letter day abbreviation for a YYYY-MM-DD string."""
+    return datetime.date.fromisoformat(date_str).strftime("%a")
+
+
+def _window_display(window_dates: list[tuple[str, int]]) -> str:
     """
-    Return the set of Yahtzee categories the player has achieved at least once,
-    computed directly from scores without the full community stats pass.
+    Format a list of (date_str, score) pairs as a compact day+die string.
+    e.g. [(2026-05-05, 3), (2026-05-06, 3), (2026-05-07, 3)]
+      →  "Mon⚂ Tue⚂ Wed⚂"
+    """
+    return "  ".join(
+        f"{_day_abbr(d)}{_SCORE_DIE.get(s, '?')}"
+        for d, s in window_dates
+    )
+
+
+def _player_yahtzee_windows(handle: str, scores: dict) -> tuple[set[str], dict[str, list[tuple[str, int]]]]:
+    """
+    Return (achieved_set, latest_windows) where latest_windows maps each
+    achieved category key to the (date_str, score) pairs of its most recent
+    qualifying window. Used by check_yahtzee_achievements to build rich
+    notifications.
     """
     dated = sorted(
         (d, scores[d][handle]) for d in scores if handle in scores.get(d, {})
@@ -2824,6 +2847,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
     sc = [s for _, s in dated]
     n  = len(dated)
     achieved: set[str] = set()
+    windows: dict[str, list[tuple[str, int]]] = {}
 
     def _consec(start: int, length: int) -> bool:
         for j in range(start, start + length - 1):
@@ -2833,6 +2857,9 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
                 return False
         return True
 
+    def _win(start: int, length: int) -> list[tuple[str, int]]:
+        return [(dated[j][0], sc[j]) for j in range(start, start + length)]
+
     # four_kind first — consumed windows excluded from three_kind
     four_consumed: set[int] = set()
     i = 0
@@ -2841,6 +2868,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
             w = sc[i:i+4]
             if DNF not in w and len(set(w)) == 1:
                 achieved.add("four_kind")
+                windows["four_kind"] = _win(i, 4)   # keeps most recent
                 for j in range(i, i + 4):
                     four_consumed.add(j)
                 i += 4; continue
@@ -2853,6 +2881,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
             w = sc[i:i+3]
             if DNF not in w and len(set(w)) == 1:
                 achieved.add("three_kind")
+                windows["three_kind"] = _win(i, 3)
                 i += 3; continue
         i += 1
 
@@ -2864,6 +2893,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
                 counts = sorted([w.count(v) for v in set(w)], reverse=True)
                 if counts == [3, 2]:
                     achieved.add("full_house")
+                    windows["full_house"] = _win(i, 5)
                     i += 5; continue
         i += 1
 
@@ -2874,6 +2904,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
             w = sc[i:i+4]
             if DNF not in w and set(w) in _small_straights:
                 achieved.add("small_straight")
+                windows["small_straight"] = _win(i, 4)
                 i += 4; continue
         i += 1
 
@@ -2883,6 +2914,7 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
             w = sc[i:i+5]
             if DNF not in w and set(w) == {1, 2, 3, 4, 5}:
                 achieved.add("large_straight")
+                windows["large_straight"] = _win(i, 5)
                 i += 5; continue
         i += 1
 
@@ -2892,45 +2924,61 @@ def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
             w = sc[i:i+5]
             if DNF not in w and len(set(w)) == 1:
                 achieved.add("yahtzee")
+                windows["yahtzee"] = _win(i, 5)
                 i += 5; continue
         i += 1
 
+    return achieved, windows
+
+
+def _player_yahtzee_categories(handle: str, scores: dict) -> set[str]:
+    """Thin wrapper — returns achieved set only (used by pre-existing callers)."""
+    achieved, _ = _player_yahtzee_windows(handle, scores)
     return achieved
 
 
 def check_yahtzee_achievements(handle: str, scores: dict,
-                               date_str: str) -> tuple[list[str], set[str]]:
+                               date_str: str) -> tuple[list[str], set[str], dict]:
     """
     Determine which Yahtzee categories were newly triggered by today's score.
-    Compares categories achievable with today vs without today.
-    Returns (new_cats, all_achieved_after).
+    Returns (new_cats, all_achieved_after, new_windows) where new_windows maps
+    each newly achieved category to its qualifying (date_str, score) window.
     """
-    after = _player_yahtzee_categories(handle, scores)
+    after, after_windows = _player_yahtzee_windows(handle, scores)
 
     # Temporarily remove today's score to get the before state
     today_score = scores[date_str].pop(handle, None)
-    before = _player_yahtzee_categories(handle, scores)
+    before, _ = _player_yahtzee_windows(handle, scores)
     if today_score is not None:
         scores[date_str][handle] = today_score   # restore
 
     new_cats = sorted(after - before)
-    return new_cats, after
+    new_windows = {cat: after_windows[cat] for cat in new_cats if cat in after_windows}
+    return new_cats, after, new_windows
 
 
 def make_yahtzee_notification(display_name: str, new_cats: list[str],
-                              all_achieved: set[str]) -> str:
+                              all_achieved: set[str],
+                              new_windows: dict | None = None) -> str:
     """
     Build a congratulations reply for newly achieved Yahtzee categories.
-    Appends a full card bonus line if all 5 are now achieved.
+    Shows the qualifying window as day abbreviations + die pip emojis.
+    Appends a full card bonus line if all 6 categories are now achieved.
     """
-    if len(new_cats) == 1:
-        die, label = _YAHTZEE_CAT_LABELS[new_cats[0]]
-        lines = [f"{die} {display_name} just hit {label} on their Yahtzee card! 🎲"]
-    else:
-        lines = [f"🎲 {display_name} just unlocked multiple Yahtzee categories!"]
-        for cat in new_cats:
-            die, label = _YAHTZEE_CAT_LABELS[cat]
-            lines.append(f"  {die} {label}")
+    lines = []
+    for cat in new_cats:
+        die, label = _YAHTZEE_CAT_LABELS[cat]
+        window = new_windows.get(cat) if new_windows else None
+        if window:
+            grid = _window_display(window)
+            lines.append(f"{die} {display_name} just hit {label}! 🎲")
+            lines.append(f"   {grid}")
+        else:
+            lines.append(f"{die} {display_name} just hit {label} on their Yahtzee card! 🎲")
+
+    if len(new_cats) > 1:
+        lines.insert(0, f"🎲 {display_name} just unlocked multiple Yahtzee categories!")
+        lines.insert(1, "")
 
     if set(_YAHTZEE_CATS) <= all_achieved:
         lines.append("")
@@ -3046,10 +3094,10 @@ def collect_results(session: dict, scores: dict, dry_run: bool = False) -> int:
                     _post_and_print(f"Score {score} reaction for @{author}", reaction, session, dry_run, reply_to=post_ref, is_reaction=True)
 
             # Yahtzee achievement check — fires on any score that may complete a run
-            new_cats, all_achieved = check_yahtzee_achievements(author, scores, date_str)
+            new_cats, all_achieved, new_windows = check_yahtzee_achievements(author, scores, date_str)
             if new_cats:
                 logger.info("🎲 Yahtzee achievement(s) for @%s: %s", author, new_cats)
-                notif = make_yahtzee_notification(display_name, new_cats, all_achieved)
+                notif = make_yahtzee_notification(display_name, new_cats, all_achieved, new_windows)
                 _post_and_print(
                     f"Yahtzee achievement for @{author}",
                     notif, session, dry_run,
