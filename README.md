@@ -1,4 +1,4 @@
-# 🚌 Routle Bot — v6.6
+# 🚌 Routle Bot — v6.7
 
 A Bluesky bot for [Routle](https://routle.city) transit guessing games. Monitors a custom feed, tracks scores, posts daily leaderboards and threaded period standings, reacts to individual results with Portland-flavored commentary, tracks streaks, aces, DNFs, and milestones, manages a Routlers player list, follows new players, and supports a full suite of player DM commands.
 
