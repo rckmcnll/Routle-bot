@@ -1947,10 +1947,11 @@ def _challenge_standings(challenge: dict, scores: dict, best_of: int) -> list:
                 qualifying.append(_challenge_score_value(day_scores[handle]))
 
         qualifying.sort()
-        best   = qualifying[:best_of]
-        total  = sum(best)
-        played = len(qualifying)
-        avg    = round(total / len(best), 2) if best else None
+        best     = qualifying[:best_of]
+        total    = sum(best)
+        played   = len(qualifying)
+        avg      = round(total / len(best), 2) if best else None
+        eligible = played >= best_of   # must have played at least N days to rank
 
         rows.append({
             "handle":        handle,
@@ -1959,67 +1960,171 @@ def _challenge_standings(challenge: dict, scores: dict, best_of: int) -> list:
             "total":         total,
             "avg":           avg,
             "joined_date":   joined_date,
+            "eligible":      eligible,
         })
 
-    rows.sort(key=lambda r: (
+    # Eligible players sorted by total asc, then avg asc, then handle.
+    # Ineligible players sorted below by avg asc (best effort), then handle.
+    eligible_rows   = [r for r in rows if r["eligible"]]
+    ineligible_rows = [r for r in rows if not r["eligible"]]
+    eligible_rows.sort(key=lambda r: (
         r["total"] if r["best_scores"] else 999,
         r["avg"]   if r["avg"] is not None else 9.9,
         r["handle"]
     ))
-    return rows
+    ineligible_rows.sort(key=lambda r: (
+        r["avg"]   if r["avg"] is not None else 9.9,
+        r["handle"]
+    ))
+    return eligible_rows + ineligible_rows
 
 
-def _challenge_report_text(challenge: dict, standings: list,
-                            is_final: bool, best_of: int) -> str:
-    """Format the DM standings report for a challenge."""
+def _challenge_daily_text(challenge: dict, standings: list, best_of: int) -> str:
+    """Format a mid-week daily standings DM — compact, functional."""
     code  = challenge["code"]
-    start = challenge["start_date"]
     end   = challenge["end_date"]
     n     = len(standings)
-    label = "🏁 FINAL RESULTS" if is_final else "📊 DAILY STANDINGS"
 
     lines = [
-        f"{label} — Challenge {code}",
-        f"📅 {start} → {end}  |  {n} player{'s' if n != 1 else ''}",
-        f"Scoring: best {best_of} of 7 days  (DNF = 7)",
+        f"📊 DAILY STANDINGS — Challenge {code}",
+        f"Ends {end}  |  {n} player{'s' if n != 1 else ''}  |  best {best_of} of 7",
         "─────────────────────",
     ]
 
-    medals     = ["🥇", "🥈", "🥉"]
-    prev_total = None
-    tied_rank  = 1
+    medals         = ["🥇", "🥈", "🥉"]
+    prev_total     = None
+    tied_rank      = 1
+    elig_count     = 0
+    eligible_rows   = [r for r in standings if r.get("eligible", True)]
+    ineligible_rows = [r for r in standings if not r.get("eligible", True)]
 
-    for i, row in enumerate(standings):
-        rank = i + 1
-        if row["total"] == prev_total:
-            rank = tied_rank
-        else:
-            tied_rank = rank
+    for row in eligible_rows:
+        elig_count += 1
+        if row["total"] != prev_total:
+            tied_rank  = elig_count
         prev_total = row["total"]
-
-        medal  = medals[rank - 1] if rank <= 3 else f"{rank}."
+        medal  = medals[tied_rank - 1] if tied_rank <= 3 else f"{tied_rank}."
         handle = row["handle"]
-        played = row["scores_played"]
-
         if row["best_scores"]:
             score_str = "+".join(str(s) for s in row["best_scores"])
             avg_str   = f"{row['avg']:.2f}" if row["avg"] is not None else "—"
             lines.append(
                 f"{medal} @{handle}  [{score_str}]={row['total']}  "
-                f"avg {avg_str}  ({played} day{'s' if played != 1 else ''} played)"
+                f"avg {avg_str}  ({row['scores_played']}d)"
             )
         else:
             lines.append(f"{medal} @{handle}  (no scores yet)")
 
+    if ineligible_rows:
+        lines.append(f"── below min {best_of}d ──")
+        for row in ineligible_rows:
+            avg_str = f"{row['avg']:.2f}" if row["avg"] is not None else "—"
+            lines.append(f"—  @{row['handle']}  avg {avg_str}  ({row['scores_played']}d)")
+
     lines.append("─────────────────────")
-    if is_final:
-        winner = standings[0]["handle"] if standings else "nobody"
-        lines.append(f"🎉 Congratulations @{winner} — champion of challenge {code}!")
-        lines.append("Thanks for playing, Routlers. 🚋")
-    else:
-        lines.append("Good luck tomorrow! 🚊")
+    lines.append("Good luck tomorrow! 🚊")
+    return "\n".join(lines)
+
+
+# Portland-flavored runner-up lines indexed by finishing position (0-based after winner)
+_CHALLENGE_PODIUM_LINES = [
+    "🥈 {handle} pushes through in second. Transfers are hard. So is losing. 🚌",
+    "🥉 {handle} rounds out the podium. Third stop, doors on the left. 🚋",
+]
+_CHALLENGE_FINISHER_LINES = [
+    "{handle} — showed up every day. The route respects the effort. 🗺️",
+    "{handle} — not every ride ends at the destination you planned. 🚉",
+    "{handle} — the schedule was against them. Blame TriMet. 🚍",
+]
+
+
+def _challenge_final_text(challenge: dict, standings: list, best_of: int) -> str:
+    """
+    Format the final results DM — full ceremony treatment.
+    Champion gets a headline. Each finisher gets a personal breakdown and a line.
+    """
+    code  = challenge["code"]
+    start = challenge["start_date"]
+    end   = challenge["end_date"]
+    n     = len(standings)
+
+    start_fmt = datetime.datetime.strptime(start, "%Y-%m-%d").strftime("%b %-d")
+    end_fmt   = datetime.datetime.strptime(end,   "%Y-%m-%d").strftime("%b %-d, %Y")
+
+    winner = standings[0]["handle"] if standings else "nobody"
+    winner_short = _short_handle(winner)
+
+    lines = [
+        f"🏁 CHALLENGE {code} — FINAL RESULTS",
+        f"📅 {start_fmt} → {end_fmt}  |  {n} player{'s' if n != 1 else ''}",
+        f"Scoring: best {best_of} of 7 days  (DNF = 7)",
+        "",
+        f"🎉 @{winner_short} is the champion!",
+        "═════════════════════",
+    ]
+
+    medals          = ["🥇", "🥈", "🥉"]
+    prev_total      = None
+    tied_rank       = 1
+    elig_count      = 0
+    eligible_rows   = [r for r in standings if r.get("eligible", True)]
+    ineligible_rows = [r for r in standings if not r.get("eligible", True)]
+
+    for row in eligible_rows:
+        elig_count += 1
+        if row["total"] != prev_total:
+            tied_rank  = elig_count
+        prev_total = row["total"]
+        rank  = tied_rank
+        medal = medals[rank - 1] if rank <= 3 else f"{rank}."
+        short = _short_handle(row["handle"])
+
+        if row["best_scores"]:
+            score_str = " + ".join(str(s) for s in row["best_scores"])
+            avg_str   = f"{row['avg']:.2f}" if row["avg"] is not None else "—"
+            dnf_note  = f"  {sum(1 for s in row['best_scores'] if s == 7)}✗" if any(s == 7 for s in row["best_scores"]) else ""
+            lines.append(f"{medal} @{short}")
+            lines.append(f"   {score_str} = {row['total']}  ⌀{avg_str}  {row['scores_played']}d played{dnf_note}")
+        else:
+            lines.append(f"{medal} @{short}  (no scores recorded)")
+
+        # Flavour line
+        if rank == 1:
+            pass   # champion headlined above
+        elif rank - 1 <= len(_CHALLENGE_PODIUM_LINES):
+            lines.append("   " + _CHALLENGE_PODIUM_LINES[rank - 2].format(handle=f"@{short}"))
+        else:
+            template = _CHALLENGE_FINISHER_LINES[(rank - 4) % len(_CHALLENGE_FINISHER_LINES)]
+            lines.append("   " + template.format(handle=f"@{short}"))
+
+        lines.append("")
+
+    # Ineligible section — listed but unranked
+    if ineligible_rows:
+        lines.append(f"── below min {best_of}d ──")
+        for row in ineligible_rows:
+            short   = _short_handle(row["handle"])
+            avg_str = f"{row['avg']:.2f}" if row["avg"] is not None else "—"
+            lines.append(f"—  @{short}  avg {avg_str}  ({row['scores_played']}d played)")
+        lines.append("")
+
+    # Trim trailing blank
+    while lines and lines[-1] == "":
+        lines.pop()
+
+    lines.append("═════════════════════")
+    lines.append("Thanks for riding with us, Routlers. 🚋")
+    lines.append("DM CHALLENGE to start your next one. ⚔️")
 
     return "\n".join(lines)
+
+
+def _challenge_report_text(challenge: dict, standings: list,
+                            is_final: bool, best_of: int) -> str:
+    """Route to the appropriate formatter based on whether this is final or daily."""
+    if is_final:
+        return _challenge_final_text(challenge, standings, best_of)
+    return _challenge_daily_text(challenge, standings, best_of)
 
 
 def _dm_challenge_report(challenge: dict, session: dict,
@@ -2093,18 +2198,8 @@ def tick_challenges(session: dict) -> None:
             logger.info("Challenge %s is now ACTIVE (started %s).", code, today)
             _notify_challenge_start(ch, session)
 
-        # 2. Daily standings (active only)
-        if state == "active" and CHALLENGE_REPORT_TIME:
-            if ch.get("last_report_date") != today:
-                ch["last_report_date"] = today
-                changed = True
-                logger.info("Sending daily standings for challenge %s.", code)
-                try:
-                    _dm_challenge_report(ch, session, is_final=False)
-                except Exception:
-                    logger.exception("Daily standings DM failed for %s.", code)
-
-        # 3. Finalize: mark complete and send final report the morning after end_date
+        # 3. Finalize: mark complete and send final report the morning after end_date.
+        # Check this BEFORE step 2 so we don't send a daily DM on the same tick.
         if state == "active" and ch["end_date"] == yesterday:
             ch["status"] = "complete"
             changed = True
@@ -2113,6 +2208,17 @@ def tick_challenges(session: dict) -> None:
                 _dm_challenge_report(ch, session, is_final=True)
             except Exception:
                 logger.exception("Final standings DM failed for %s.", code)
+
+        # 2. Daily standings (active only, and not on the finalization tick)
+        elif state == "active" and CHALLENGE_REPORT_TIME:
+            if ch.get("last_report_date") != today:
+                ch["last_report_date"] = today
+                changed = True
+                logger.info("Sending daily standings for challenge %s.", code)
+                try:
+                    _dm_challenge_report(ch, session, is_final=False)
+                except Exception:
+                    logger.exception("Daily standings DM failed for %s.", code)
 
     if changed:
         _save_challenges(challenges)
