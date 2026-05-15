@@ -13,6 +13,26 @@ Players can now challenge each other to private 1-week tournaments entirely via 
 
 ---
 
+## What's new in v6.6
+
+### Live Yahtzee achievement notifications
+When a player unlocks a new Yahtzee category (three-of-a-kind, four-of-a-kind, full house, small straight, large straight, or Yahtzee) during normal play, the bot posts a public reply on their score post celebrating the new achievement. The reply shows the qualifying score window as day abbreviations and die-pip emojis, tracks progress toward a full scorecard (e.g. `2/6 categories · 4 to go`), and gives a special full-card message when all six categories are unlocked. Multiple categories unlocked by the same score get a combined announcement.
+
+### Day-of-week standings improvements
+Day-of-week standings (`dow_monday` through `dow_sunday`) now show each player's games-played count alongside their average score (e.g. `⌀1.40  12gp`). Ties are broken by number of qualifying games on that weekday — more experience means a better tie position.
+
+---
+
+## What's new in v6.7
+
+### Challenge standings eligibility
+Players must now have played at least `CHALLENGE_BEST_OF` days to earn a ranked position. Players below that threshold appear in a separate `── below min Nd ──` section at the end of standings — listed but not ranked. This keeps the leaderboard fair when late joiners or frequent absences create lopsided totals.
+
+### Redesigned challenge final report
+The final results DM has a new format: the champion is announced up front before the individual breakdown. Each finisher gets their own block with score-by-score breakdown, total, average, and days played, plus a Portland-flavored one-liner (podium commentary for 2nd and 3rd, rotating finisher lines beyond). Ineligible players appear in a separate section at the bottom. Ends with `Thanks for riding with us, Routlers. 🚋`.
+
+---
+
 ## Features
 
 ### Daily leaderboard
@@ -50,6 +70,7 @@ The bot replies to each player's score post with Portland-flavored commentary:
 - **Guesses 2–5** — score-appropriate commentary
 - **DNF** — commiseration
 - **Streaks** — 🔥 suffix for consecutive days, new personal bests called out
+- **Yahtzee achievements** — reply when a player's score completes a new Yahtzee category (three-of-a-kind, four-of-a-kind, full house, small/large straight, or Yahtzee), showing the qualifying window and remaining categories; special message for a full scorecard
 
 Reactions are suppressed during configurable quiet hours. Opted-out players still appear in leaderboards.
 
@@ -65,7 +86,7 @@ The bot follows each new player from the bot account on their first result, and 
 ### Fun standings
 Ad-hoc novelty categories posted on demand as a threaded reply chain, each with a description post appended. A random category can also be scheduled daily. Available categories:
 
-**Day of week** — `dow_monday` through `dow_sunday` — best avg score per player on that weekday.
+**Day of week** — `dow_monday` through `dow_sunday` — best avg score per player on that weekday, with games-played count shown alongside the average. Ties broken by number of qualifying games on that day.
 
 **Score counts** — `score_2` through `score_5` — most times a player scored that exact value.
 
@@ -129,7 +150,7 @@ Players can challenge each other to private 1-week tournaments via DM. The bot m
 5. Daily standings DMs are sent at `CHALLENGE_REPORT_TIME` throughout the week.
 6. On the morning after the final day, the bot sends a final report with champion and full results to everyone.
 
-**Scoring:** best `CHALLENGE_BEST_OF` scores (default: 5) of 7 days, lowest total wins. DNF counts as 7. Late joiners are welcome — only scores from their join date onward count.
+**Scoring:** best `CHALLENGE_BEST_OF` scores (default: 5) of 7 days, lowest total wins. DNF counts as 7. Late joiners are welcome — only scores from their join date onward count. Players must have played at least `CHALLENGE_BEST_OF` days to be ranked; those below that threshold are listed separately as ineligible.
 
 **Invite flow example:**
 
@@ -149,17 +170,30 @@ When an invitee accepts, the creator is notified:
 
 Final report sent to all participants on conclusion:
 ```
-🏁 FINAL RESULTS — Challenge AB3X7K
-📅 2026-05-08 → 2026-05-15  |  4 players
+🏁 CHALLENGE AB3X7K — FINAL RESULTS
+📅 May 8 → May 15, 2026  |  4 players
 Scoring: best 5 of 7 days  (DNF = 7)
-─────────────────────
-🥇 @busonly        [1+1+2+1+2]=7   avg 1.40  (7 days played)
-🥈 @willowashmaple [1+2+2+3+3]=11  avg 2.20  (6 days played)
-🥉 @khrisoden      [2+2+3+3+4]=14  avg 2.80  (5 days played)
-4. @rockom         [1+2+3+4+5]=15  avg 3.00  (7 days played)
-─────────────────────
-🎉 Congratulations @busonly — champion of challenge AB3X7K!
-Thanks for playing, Routlers. 🚋
+
+🎉 @busonly is the champion!
+═════════════════════
+🥇 @busonly
+   1 + 1 + 2 + 1 + 2 = 7  ⌀1.40  7d played
+
+🥈 @willowashmaple
+   1 + 2 + 2 + 3 + 3 = 11  ⌀2.20  6d played
+   🥈 @willowashmaple pushes through in second. Transfers are hard. So is losing. 🚌
+
+🥉 @khrisoden
+   2 + 2 + 3 + 3 + 4 = 14  ⌀2.80  5d played
+   🥉 @khrisoden rounds out the podium. Third stop, doors on the left. 🚋
+
+4. @rockom
+   1 + 2 + 3 + 4 + 5 = 15  ⌀3.00  7d played
+   @rockom — showed up every day. The route respects the effort. 🗺️
+
+═════════════════════
+Thanks for riding with us, Routlers. 🚋
+DM CHALLENGE to start your next one. ⚔️
 ```
 
 ---
